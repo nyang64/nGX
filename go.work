@@ -1,0 +1,15 @@
+go 1.23
+
+use (
+    ./pkg
+    ./services/api
+    ./services/auth
+    ./services/inbox
+    ./services/email-pipeline
+    ./services/event-dispatcher
+    ./services/webhook-service
+    ./services/scheduler
+    ./services/search
+    ./services/embedder
+    ./tools/migrate
+)

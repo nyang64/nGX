@@ -1,0 +1,98 @@
+package embedder
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+	"strconv"
+	"time"
+)
+
+// Client calls an OpenAI-compatible embedding server such as Infinity or Ollama.
+type Client struct {
+	baseURL string
+	model   string
+	dims    int
+	http    *http.Client
+}
+
+// New creates a Client.
+//
+//   - baseURL: e.g. "http://infinity:7997" or "http://ollama:11434"
+//   - model:   e.g. "nomic-embed-text-v1.5"
+//   - dims:    dimensions to keep after MRL truncation (0 = keep all returned dims)
+func New(baseURL, model string, dims int) *Client {
+	return &Client{
+		baseURL: strings.TrimRight(baseURL, "/"),
+		model:   model,
+		dims:    dims,
+		http:    &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+type embedRequest struct {
+	Model string `json:"model"`
+	Input string `json:"input"`
+}
+
+type embedResponse struct {
+	Data []struct {
+		Embedding []float32 `json:"embedding"`
+	} `json:"data"`
+}
+
+// Embed generates an embedding vector for text, truncated to c.dims dimensions.
+// It uses the /embeddings endpoint (Infinity-compatible; Ollama users should
+// set EMBEDDER_URL to the /v1 base, e.g. http://localhost:11434/v1).
+func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
+	body, err := json.Marshal(embedRequest{Model: c.model, Input: text})
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.baseURL+"/embeddings", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("embedding request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("embedding server returned %d", resp.StatusCode)
+	}
+
+	var result embedResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode embedding response: %w", err)
+	}
+	if len(result.Data) == 0 || len(result.Data[0].Embedding) == 0 {
+		return nil, fmt.Errorf("empty embedding response")
+	}
+
+	vec := result.Data[0].Embedding
+	if c.dims > 0 && len(vec) > c.dims {
+		vec = vec[:c.dims]
+	}
+	return vec, nil
+}
+
+// VectorLiteral formats a float32 slice as a PostgreSQL vector literal
+// suitable for use as a query parameter with a ::vector cast, e.g.:
+//
+//	UPDATE messages SET embedding = $1::vector WHERE id = $2
+func VectorLiteral(v []float32) string {
+	parts := make([]string, len(v))
+	for i, f := range v {
+		parts[i] = strconv.FormatFloat(float64(f), 'f', -1, 32)
+	}
+	return "[" + strings.Join(parts, ",") + "]"
+}

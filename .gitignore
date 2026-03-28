@@ -1,0 +1,87 @@
+# ============================================================
+# AgentMail .gitignore
+# ============================================================
+
+# ------------------------------------------------------------
+# Go build artifacts
+# ------------------------------------------------------------
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries and coverage
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Go build cache (not typically committed)
+/vendor/
+
+# Go workspace sum (can be regenerated)
+go.work.sum
+
+# ------------------------------------------------------------
+# Environment / Secrets
+# ------------------------------------------------------------
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.crt
+secrets/
+
+# ------------------------------------------------------------
+# IDE and editor files
+# ------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# golangci-lint cache
+.golangci-lint-cache/
+
+# air hot-reload
+tmp/
+
+# ------------------------------------------------------------
+# Docker
+# ------------------------------------------------------------
+# Don't ignore docker-compose overrides intentionally used in dev,
+# but do ignore personal local overrides.
+docker-compose.override.yml
+
+# ------------------------------------------------------------
+# Tooling / misc
+# ------------------------------------------------------------
+.task/
+*.log
+*.prof
+cpu.prof
+mem.prof
+
+# Terraform (if any infra-as-code lives here)
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+
+# ------------------------------------------------------------
+# OS generated
+# ------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

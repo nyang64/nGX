@@ -1,0 +1,2 @@
+DROP TABLE thread_labels CASCADE;
+DROP TABLE labels CASCADE;
