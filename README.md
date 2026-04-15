@@ -1,23 +1,30 @@
 # nGX
 
-Email infrastructure purpose-built for AI agents — programmable inboxes, real-time events, multi-tenancy, and a first-class REST API.
+**Self-hosted email infrastructure for AI agents.** Deploy on your own domain, your own servers. Your agents get real email addresses at `agent@mail.yourdomain.com` — not `agent@somevendor.to`.
 
-## What It Is
+## Why nGX
 
-nGX gives AI agents a real email address they can send and receive mail through, with a clean API that doesn't require IMAP/SMTP knowledge. You create inboxes programmatically, receive events in real-time over WebSocket or webhooks, and build human-in-the-loop review flows using the draft system.
+Hosted email-for-agents services give your AI agents email addresses on a vendor's domain. You depend on their uptime, their pricing, and their data policies. nGX is the alternative: a complete email platform you install in your own infrastructure, on your own domain.
+
+- **You own the domain** — configure `MAIL_DOMAIN=mail.yourdomain.com` and every inbox provisions under your domain
+- **You own the data** — email bodies, attachments, and thread history stay in your PostgreSQL and S3
+- **You own the keys** — DKIM signing uses your private keys; SPF and DMARC point to your DNS
+- **No per-seat subscription** — deploy for as many agents as your hardware supports
+
+nGX is designed for enterprises that want the capabilities of a managed email platform without the vendor lock-in.
 
 ## Features
 
-- **Programmable inboxes** — create/manage email addresses via REST API
-- **Full SMTP pipeline** — inbound reception with MIME parsing; outbound MX delivery with retry
+- **Programmable inboxes** — create/manage email addresses via REST API; supply just a username and nGX appends your configured domain
+- **Full SMTP pipeline** — inbound reception with MIME parsing; outbound MX delivery with DKIM signing and retry
 - **Thread management** — automatic conversation threading via In-Reply-To/References headers
-- **Real-time events** — WebSocket stream and webhooks with HMAC-SHA256 signatures
+- **Real-time events** — WebSocket stream and webhooks with HMAC-SHA256 signatures (`X-nGX-Signature`)
 - **Draft / human-in-the-loop** — agents create drafts, humans approve/reject before sending
-- **Multi-tenancy** — Org -> Pod -> Inbox hierarchy with strict data isolation via PostgreSQL RLS
+- **Multi-tenancy** — Org → Pod → Inbox hierarchy with strict data isolation via PostgreSQL RLS
 - **API key RBAC** — fine-grained scopes (inbox:read, inbox:write, draft:write, org:admin, ...)
 - **Label system** — tag and filter threads
 - **Full-text search** — PostgreSQL tsvector search across subjects and bodies
-- **Event-driven** — Kafka backbone connects all services
+- **Event-driven** — Kafka backbone connects all services; emit events to your own consumers
 
 ## Architecture
 
@@ -55,7 +62,7 @@ nGX gives AI agents a real email address they can send and receive mail through,
                │ HTTP delivery     │  │  (WS hub)          │
                └───────────────────┘  └───────────────────┘
 
-  Data Stores
+  Data Stores (all self-hosted)
   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
   │ Postgres │  │  Redis   │  │   S3/    │  │  Kafka   │
   │ +RLS     │  │ Cache    │  │  MinIO   │  │  Topics  │
@@ -67,7 +74,7 @@ nGX gives AI agents a real email address they can send and receive mail through,
 ```
 Organization  (billing root, holds API keys)
   └── Pod     (isolated namespace — maps to a sub-customer or product)
-        └── Inbox  (email address: agent@pod.nGX.io)
+        └── Inbox  (email address: agent@mail.yourdomain.com)
               └── Thread  (conversation, grouped by In-Reply-To/References)
                     └── Message  (individual email, inbound or outbound)
                           └── Attachment
@@ -95,8 +102,22 @@ Every table carries `org_id` and PostgreSQL Row-Level Security enforces tenant i
 - Go 1.23+
 - Docker + Docker Compose
 - Make
+- Your own domain with DNS control (for production deployments)
 
-### 1. Bootstrap local environment
+### 1. Configure your domain
+
+Before starting, set your mail domain. This is what all inboxes will be provisioned under:
+
+```bash
+cp .env.example .env
+# Edit .env and set:
+#   MAIL_DOMAIN=mail.yourdomain.com
+#   DKIM_DOMAIN=mail.yourdomain.com
+```
+
+For local development you can leave `MAIL_DOMAIN` empty and supply full addresses (e.g. `agent@localhost`) when creating inboxes.
+
+### 2. Bootstrap local environment
 
 ```bash
 make setup       # installs tools, copies .env.example, starts infra, runs migrations
@@ -105,12 +126,11 @@ make setup       # installs tools, copies .env.example, starts infra, runs migra
 Or step by step:
 
 ```bash
-cp .env.example .env
 make up          # starts Postgres, Kafka, Redis, MinIO, Mailhog
 make migrate-up  # applies all database migrations
 ```
 
-### 2. Start services
+### 3. Start services
 
 ```bash
 # Terminal 1 — core services
@@ -133,7 +153,7 @@ Or use the Makefile hot-reload target for the API:
 make dev-api
 ```
 
-### 3. Create an org and API key
+### 4. Create an org and API key
 
 ```bash
 # Create organization
@@ -154,12 +174,14 @@ curl -X POST http://localhost:8080/v1/pods \
   -H "Authorization: Bearer $KEY" \
   -d '{"name":"My Product","slug":"my-product"}'
 
+# Provision an inbox — with MAIL_DOMAIN set, just supply the username
 curl -X POST http://localhost:8080/v1/inboxes \
   -H "Authorization: Bearer $KEY" \
-  -d '{"pod_id":"<pod-id>","address":"agent@localhost"}'
+  -d '{"pod_id":"<pod-id>","address":"agent"}'
+# → inbox.email will be "agent@mail.yourdomain.com"
 ```
 
-### 4. Send and receive email
+### 5. Send and receive email
 
 ```bash
 # Send outbound
@@ -171,6 +193,27 @@ curl -X POST http://localhost:8080/v1/inboxes/<inbox-id>/messages/send \
 curl http://localhost:8080/v1/inboxes/<inbox-id>/threads \
   -H "Authorization: Bearer $KEY"
 ```
+
+## Production Deployment
+
+For a production self-hosted deployment you need:
+
+1. **DNS records on your domain**
+   - MX record: `mail.yourdomain.com` → your server IP
+   - SPF TXT: `v=spf1 ip4:<your-ip> -all`
+   - DKIM TXT: publish the public key matching your `DKIM_PRIVATE_KEY`
+   - DMARC TXT: `v=DMARC1; p=quarantine; rua=mailto:dmarc@yourdomain.com`
+
+2. **Environment variables** (see `.env.example` for full reference)
+   ```
+   MAIL_DOMAIN=mail.yourdomain.com
+   DKIM_DOMAIN=mail.yourdomain.com
+   DKIM_SELECTOR=mail
+   DKIM_PRIVATE_KEY=<base64-encoded RSA private key>
+   DATABASE_URL=postgres://...
+   ```
+
+3. **Port exposure**: open port 25 (or 2525) for inbound SMTP; expose port 8080 behind your load balancer for the REST API.
 
 ## Project Structure
 
