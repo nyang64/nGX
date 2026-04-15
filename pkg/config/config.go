@@ -29,6 +29,10 @@ type Config struct {
 
 	EmbedderURL   string
 	EmbedderModel string
+
+	// MailDomain is the default domain for provisioning inboxes (e.g. "mail.yourdomain.com").
+	// Required for self-hosted deployments. Set via the MAIL_DOMAIN environment variable.
+	MailDomain string
 }
 
 type DatabaseConfig struct {
@@ -74,8 +78,8 @@ type SMTPConfig struct {
 	RelayHost string
 	// DKIM signing for outbound email.
 	DKIMPrivateKeyPEM string // PEM-encoded RSA or Ed25519 private key
-	DKIMSelector      string // DNS selector, e.g. "agentmail1"
-	DKIMDomain        string // Signing domain, e.g. "agentmail.to"
+	DKIMSelector      string // DNS selector subdomain
+	DKIMDomain        string // Signing domain — must match MAIL_DOMAIN or a verified custom domain
 }
 
 type WebhookConfig struct {
@@ -131,7 +135,7 @@ func Load() *Config {
 			Hostname:          getEnv("SMTP_HOSTNAME", "localhost"),
 			RelayHost:         getEnv("SMTP_RELAY_HOST", ""),
 			DKIMPrivateKeyPEM: getEnv("DKIM_PRIVATE_KEY_PEM", ""),
-			DKIMSelector:      getEnv("DKIM_SELECTOR", "agentmail1"),
+			DKIMSelector:      getEnv("DKIM_SELECTOR", "mail"),
 			DKIMDomain:        getEnv("DKIM_DOMAIN", ""),
 		},
 		Webhook: WebhookConfig{
@@ -151,6 +155,8 @@ func Load() *Config {
 
 		EmbedderURL:   getEnv("EMBEDDER_URL", "http://localhost:7997"),
 		EmbedderModel: getEnv("EMBEDDER_MODEL", "nomic-embed-text-v1.5"),
+
+		MailDomain: getEnv("MAIL_DOMAIN", ""),
 	}
 	return cfg
 }

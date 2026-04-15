@@ -19,7 +19,7 @@ import (
 
 // generateMessageID produces an RFC 5322-compliant Message-ID header value.
 func generateMessageID() string {
-	return fmt.Sprintf("<%s@agentmail>", uuid.New().String())
+	return fmt.Sprintf("<%s@nGX>", uuid.New().String())
 }
 
 // SendMessageRequest is the input for sending a new message.

@@ -42,9 +42,9 @@ func (d *Deliverer) Deliver(ctx context.Context, webhook *models.Webhook, payloa
 		return DeliveryResult{Error: err.Error()}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-AgentMail-Signature", "sha256="+signature)
-	req.Header.Set("X-AgentMail-Event", "webhook.delivery")
-	req.Header.Set("User-Agent", "AgentMail-Webhook/1.0")
+	req.Header.Set("X-nGX-Signature", "sha256="+signature)
+	req.Header.Set("X-nGX-Event", "webhook.delivery")
+	req.Header.Set("User-Agent", "nGX-Webhook/1.0")
 	if webhook.AuthHeaderName != nil && webhook.AuthHeaderValue != "" {
 		req.Header.Set(*webhook.AuthHeaderName, webhook.AuthHeaderValue)
 	}

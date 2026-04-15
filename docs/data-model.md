@@ -361,7 +361,7 @@ Not present in the current migration set. Domain verification records (SPF, DKIM
 
 ### Overview
 
-Every table has RLS enabled. The current org is injected at the start of each database transaction using a PostgreSQL session variable. The `agentmail_app` role (used by all running services) is subject to RLS policies. The superuser/migration role bypasses RLS automatically.
+Every table has RLS enabled. The current org is injected at the start of each database transaction using a PostgreSQL session variable. The `nGX_app` role (used by all running services) is subject to RLS policies. The superuser/migration role bypasses RLS automatically.
 
 ### Setting the Context
 
@@ -507,8 +507,8 @@ Email bodies and attachments are stored in S3 (or MinIO locally), not in Postgre
 ```
 
 Two S3 buckets are provisioned by `docker-compose.yml` via `minio-init`:
-- `agentmail-emails` — raw and parsed message bodies
-- `agentmail-attachments` — attachment files (public-read in dev via `mc anonymous set download`)
+- `nGX-emails` — raw and parsed message bodies
+- `nGX-attachments` — attachment files (public-read in dev via `mc anonymous set download`)
 
 **Why S3?**
 - Email bodies can be megabytes; storing in Postgres bloats the `messages` table and degrades index scans.

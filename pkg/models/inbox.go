@@ -6,7 +6,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Inbox represents an email address managed by AgentMail.
+// Inbox represents an email address managed by nGX.
 type Inbox struct {
 	ID          uuid.UUID      `json:"id"           db:"id"`
 	OrgID       uuid.UUID      `json:"org_id"       db:"org_id"`

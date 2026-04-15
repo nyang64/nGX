@@ -1,8 +1,8 @@
-# AgentMail Architecture
+# nGX Architecture
 
 ## 1. System Overview
 
-AgentMail is email infrastructure designed for AI agents. It provides:
+nGX is email infrastructure designed for AI agents. It provides:
 - Real email addresses backed by actual SMTP delivery
 - A REST API that abstracts away SMTP/IMAP complexity
 - Event-driven notifications (webhooks + WebSocket) so agents can react to incoming mail
@@ -25,7 +25,7 @@ The data model has four levels of hierarchy:
 - Message: individual email (inbound or outbound)
 - Attachment: binary payloads on messages
 
-Concrete example: Acme Corp (org) runs a support product with pod slug "support". The inbox address is support@acme.agentmail.io. The org creates an API key with pod:admin and inbox:write scopes scoped to that pod. That key can only see data inside the support pod.
+Concrete example: Acme Corp (org) runs a support product with pod slug "support". The inbox address is support@acme.nGX.io. The org creates an API key with pod:admin and inbox:write scopes scoped to that pod. That key can only see data inside the support pod.
 
 An API key belongs to an Org. It can be org-wide (all pods visible) or scoped to a specific Pod. The pod_id field on the key's claims record determines which namespaces the key can access.
 
@@ -334,7 +334,7 @@ Service publishes event to events.fanout (keyed by org_id)
     │                       keyed by webhook_id (orders deliveries per webhook)
     │                           └─ Webhook Service consumer:
     │                                 INSERT webhook_deliveries (status='pending')
-    │                                 HTTP POST to webhook.url with X-AgentMail-Signature header
+    │                                 HTTP POST to webhook.url with X-nGX-Signature header
     │                                 On 2xx: mark success
     │                                 On failure: mark retrying, schedule retry (2^attempt seconds)
     │                                 After MaxRetries: mark failed (terminal)
@@ -493,7 +493,7 @@ inbound/raw/YYYY/MM/DD/{job_id}.eml              ← written by Enqueuer; stays 
 
 `{pod_id}` is the literal string `no-pod` when the inbox has no pod. The raw `.eml` is never copied — the `messages.raw_s3_key` column points directly to the `inbound/raw/...` key written by the Enqueuer.
 
-A single bucket (`S3_BUCKET`, default `agentmail`) is used for all objects. In local development, MinIO provides S3-compatible storage.
+A single bucket (`S3_BUCKET`, default `nGX`) is used for all objects. In local development, MinIO provides S3-compatible storage.
 
 ### PostgreSQL Connection Pool
 

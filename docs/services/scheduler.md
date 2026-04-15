@@ -1,6 +1,6 @@
 # Scheduler
 
-**Module**: `agentmail/services/scheduler`
+**Module**: `nGX/services/scheduler`
 **Role**: Background maintenance jobs for data hygiene.
 
 ## Jobs

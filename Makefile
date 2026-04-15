@@ -1,4 +1,4 @@
-# AgentMail Monorepo Makefile
+# nGX Monorepo Makefile
 # Usage: make <target> [name=migration_name]
 
 SHELL := /bin/bash
@@ -236,7 +236,7 @@ tidy: ## Sync go.work and tidy all modules
 # Docker Image Builds
 # ============================================================
 
-IMAGE_REGISTRY ?= ghcr.io/agentmail
+IMAGE_REGISTRY ?= ghcr.io/nyang64/nGX
 IMAGE_TAG      ?= $(GIT_COMMIT)
 
 .PHONY: docker-build

@@ -1,6 +1,6 @@
 # Inbox Service
 
-**Module**: `agentmail/services/inbox`
+**Module**: `nGX/services/inbox`
 **Port**: `8082`
 **Role**: Core business logic for inboxes, threads, messages, drafts, and labels. Internal service — not exposed directly to external clients.
 

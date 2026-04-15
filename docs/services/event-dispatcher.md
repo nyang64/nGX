@@ -1,6 +1,6 @@
 # Event Dispatcher
 
-**Module**: `agentmail/services/event-dispatcher`
+**Module**: `nGX/services/event-dispatcher`
 **Role**: Consumes all domain events from Kafka and fans out to the webhook delivery queue and to WebSocket clients via Redis pub/sub.
 
 ## Data Flow
@@ -9,7 +9,7 @@
 Kafka (events.fanout topic)
           │
           ▼
-  Kafka Consumer (group: agentmail)
+  Kafka Consumer (group: nGX)
           │
           ├─────────────────────────────┐
           ▼                             ▼
@@ -67,7 +67,7 @@ Within a single dispatch, webhook publish errors per-webhook are logged but do n
 
 ## Consumer Group
 
-The dispatcher uses consumer group ID `agentmail` (configurable via `KAFKA_GROUP_ID`). Only one instance in the group processes each partition. If you scale to multiple dispatcher instances, increase the topic partition count accordingly.
+The dispatcher uses consumer group ID `nGX` (configurable via `KAFKA_GROUP_ID`). Only one instance in the group processes each partition. If you scale to multiple dispatcher instances, increase the topic partition count accordingly.
 
 ## Configuration
 
@@ -75,5 +75,5 @@ The dispatcher uses consumer group ID `agentmail` (configurable via `KAFKA_GROUP
 |---------|---------|-------------|
 | DATABASE_URL | postgres://... | For webhook subscription queries |
 | KAFKA_BROKERS | localhost:9092 | Source topics + webhooks.delivery |
-| KAFKA_GROUP_ID | agentmail | Consumer group ID |
+| KAFKA_GROUP_ID | nGX | Consumer group ID |
 | REDIS_URL | redis://localhost:6379 | WebSocket pub/sub |

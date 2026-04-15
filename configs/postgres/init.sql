@@ -1,5 +1,5 @@
 -- ============================================================
--- AgentMail PostgreSQL Initialization Script
+-- nGX PostgreSQL Initialization Script
 -- Runs once when the postgres container first starts.
 -- ============================================================
 
@@ -75,7 +75,7 @@ COMMENT ON FUNCTION set_updated_at IS
 -- ------------------------------------------------------------
 -- Row-Level Security (RLS) Strategy
 -- ------------------------------------------------------------
--- AgentMail is a multi-tenant SaaS. Each tenant is identified by
+-- nGX is a multi-tenant platform. Each tenant is identified by
 -- an `org_id` (UUID). RLS policies on tenant-scoped tables filter
 -- rows using a session-local variable `app.current_org_id`.
 --

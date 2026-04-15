@@ -1,7 +1,7 @@
 openapi: 3.1.0
 
 info:
-  title: AgentMail API (Codex Reconstruction)
+  title: nGX API (Codex Reconstruction)
   version: 1.0.0
   description: |
     Best-effort reconstructed Codex variant written after the original Codex
@@ -10,7 +10,7 @@ info:
 
     Email infrastructure purpose-built for AI agents.
 
-    AgentMail lets you provision inboxes, send and receive email, manage
+    nGX lets you provision inboxes, send and receive email, manage
     drafts, and subscribe to real-time events via webhooks or WebSockets.
 
     ## Authentication
@@ -29,11 +29,11 @@ info:
     `POST /api-keys` creates additional API keys for the current organization.
     It does not create a new organization or perform account registration.
   contact:
-    name: AgentMail Support
-    url: https://agentmail.io
+    name: nGX Support
+    url: https://yourdomain.com
 
 servers:
-  - url: https://api.agentmail.io/v1
+  - url: https://api.yourdomain.com/v1
     description: Production
   - url: http://localhost:8080/v1
     description: Local development
@@ -46,11 +46,11 @@ security:
 # ---------------------------------------------------------------------------
 tags:
   - name: Organizations
-    description: Manage your AgentMail organization.
+    description: Manage your nGX organization.
   - name: Pods
     description: Logical groupings of inboxes within an organization.
   - name: Inboxes
-    description: Email addresses managed by AgentMail.
+    description: Email addresses managed by nGX.
   - name: Threads
     description: Conversation threads made up of related messages.
   - name: Messages
@@ -1531,7 +1531,7 @@ components:
           type: string
         domain:
           type: string
-          description: Domain to provision under, e.g. `agentmail.to` or a verified custom domain.
+          description: Domain to provision under, e.g. `mail.yourdomain.com` or a verified custom domain.
         pod_id:
           type: string
         display_name:
@@ -2160,7 +2160,7 @@ components:
           format: date-time
       example:
         webhook_id: "wh_123"
-        url: "https://example.com/webhooks/agentmail"
+        url: "https://example.com/webhooks/nGX"
         description: "Production agent automation"
         event_types:
           - "message.received"
@@ -2192,7 +2192,7 @@ components:
         count: 1
         webhooks:
           - webhook_id: "wh_123"
-            url: "https://example.com/webhooks/agentmail"
+            url: "https://example.com/webhooks/nGX"
             description: "Production agent automation"
             event_types:
               - "message.received"
@@ -2391,11 +2391,11 @@ components:
         status: "verified"
         records:
           - type: "TXT"
-            host: "_agentmail.example.com"
+            host: "_nGX.example.com"
             value: "am_verify_123"
           - type: "MX"
             host: "example.com"
-            value: "mx.agentmail.to"
+            value: "mx.yourdomain.com"
         created_at: "2026-03-27T18:00:00Z"
         updated_at: "2026-03-27T18:10:00Z"
 
@@ -2441,7 +2441,7 @@ components:
             status: "verified"
             records:
               - type: "TXT"
-                host: "_agentmail.example.com"
+                host: "_nGX.example.com"
                 value: "am_verify_123"
             created_at: "2026-03-27T18:00:00Z"
             updated_at: "2026-03-27T18:10:00Z"

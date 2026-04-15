@@ -6,7 +6,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Organization represents a customer account in the AgentMail platform.
+// Organization represents a customer account in the nGX platform.
 type Organization struct {
 	ID        uuid.UUID      `json:"id"         db:"id"`
 	Name      string         `json:"name"       db:"name"`

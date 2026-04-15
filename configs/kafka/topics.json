@@ -1,5 +1,5 @@
 {
-  "_comment": "Kafka topic definitions for AgentMail local development. Partition count and replication factor are set to 1 for single-broker dev environments. Increase partitions and replication in staging/production to match throughput and HA requirements.",
+  "_comment": "Kafka topic definitions for nGX local development. Partition count and replication factor are set to 1 for single-broker dev environments. Increase partitions and replication in staging/production to match throughput and HA requirements.",
   "topics": [
     {
       "name": "email.inbound.raw",

@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -128,7 +129,7 @@ func TestDeliver_SignatureHeader(t *testing.T) {
 
 	var gotSig string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotSig = r.Header.Get("X-AgentMail-Signature")
+		gotSig = r.Header.Get("X-nGX-Signature")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -141,7 +142,7 @@ func TestDeliver_SignatureHeader(t *testing.T) {
 	d.Deliver(context.Background(), webhook, payload)
 
 	if gotSig != expectedSig {
-		t.Errorf("X-AgentMail-Signature: want %q, got %q", expectedSig, gotSig)
+		t.Errorf("X-nGX-Signature: want %q, got %q", expectedSig, gotSig)
 	}
 }
 
@@ -227,5 +228,115 @@ func TestDeliver_ConnectionRefused(t *testing.T) {
 	}
 	if result.Error == "" {
 		t.Error("expected non-empty error string")
+	}
+}
+
+// TestDeliver_AllnGXHeaders verifies that every required nGX header is sent
+// on each delivery: Content-Type, X-nGX-Signature, X-nGX-Event, User-Agent.
+func TestDeliver_AllnGXHeaders(t *testing.T) {
+	var (
+		gotContentType string
+		gotSig         string
+		gotEvent       string
+		gotUserAgent   string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotContentType = r.Header.Get("Content-Type")
+		gotSig = r.Header.Get("X-nGX-Signature")
+		gotEvent = r.Header.Get("X-nGX-Event")
+		gotUserAgent = r.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	d := NewDeliverer()
+	webhook := &models.Webhook{URL: srv.URL, Secret: "s"}
+	result := d.Deliver(context.Background(), webhook, []byte(`{"event":"test"}`))
+	if !result.Success {
+		t.Fatalf("expected Success=true, got error: %s", result.Error)
+	}
+
+	if gotContentType != "application/json" {
+		t.Errorf("Content-Type: got %q, want %q", gotContentType, "application/json")
+	}
+	if !strings.HasPrefix(gotSig, "sha256=") {
+		t.Errorf("X-nGX-Signature: got %q, want sha256=... prefix", gotSig)
+	}
+	if gotEvent != "webhook.delivery" {
+		t.Errorf("X-nGX-Event: got %q, want %q", gotEvent, "webhook.delivery")
+	}
+	if gotUserAgent != "nGX-Webhook/1.0" {
+		t.Errorf("User-Agent: got %q, want %q", gotUserAgent, "nGX-Webhook/1.0")
+	}
+}
+
+// TestDeliver_PayloadArrivesVerbatim verifies that the payload bytes are
+// delivered to the receiver unchanged.
+func TestDeliver_PayloadArrivesVerbatim(t *testing.T) {
+	payload := []byte(`{"type":"message.received","inbox":"agent@example.com","subject":"Hello"}`)
+
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	d := NewDeliverer()
+	webhook := &models.Webhook{URL: srv.URL, Secret: "secret"}
+	d.Deliver(context.Background(), webhook, payload)
+
+	if string(gotBody) != string(payload) {
+		t.Errorf("payload mismatch\n got: %s\nwant: %s", gotBody, payload)
+	}
+}
+
+// TestDeliver_ReceiverCanVerifyHMAC verifies the receiver-side workflow:
+// extract X-nGX-Signature, recompute HMAC over the raw body, confirm they match.
+// This is how an agent endpoint should authenticate webhook calls.
+func TestDeliver_ReceiverCanVerifyHMAC(t *testing.T) {
+	secret := "agent-webhook-secret"
+	payload := []byte(`{"type":"message.received","message_id":"abc-123"}`)
+
+	var verified bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		sig := r.Header.Get("X-nGX-Signature")
+
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write(body)
+		expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+		verified = sig == expected
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	d := NewDeliverer()
+	webhook := &models.Webhook{URL: srv.URL, Secret: secret}
+	result := d.Deliver(context.Background(), webhook, payload)
+
+	if !result.Success {
+		t.Fatalf("delivery failed: %s", result.Error)
+	}
+	if !verified {
+		t.Error("receiver could not verify HMAC: X-nGX-Signature did not match")
+	}
+}
+
+// TestDeliver_ResponseBodyCaptured verifies that the receiver's response body
+// is captured in DeliveryResult (up to 1024 bytes) for diagnostics.
+func TestDeliver_ResponseBodyCaptured(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"received"}`))
+	}))
+	defer srv.Close()
+
+	d := NewDeliverer()
+	webhook := &models.Webhook{URL: srv.URL, Secret: "s"}
+	result := d.Deliver(context.Background(), webhook, []byte(`{}`))
+
+	if !strings.Contains(result.ResponseBody, "received") {
+		t.Errorf("response body not captured; got: %q", result.ResponseBody)
 	}
 }

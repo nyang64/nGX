@@ -1,6 +1,6 @@
 # Auth Service
 
-**Module**: `agentmail/services/auth`
+**Module**: `nGX/services/auth`
 **Port**: `8081`
 **Role**: API key lifecycle management and validation. The single source of truth for all authentication.
 
@@ -104,7 +104,7 @@ All other endpoints (`Create`, `List`, `Revoke`, `GetByID`) use `db.WithOrgTx()`
 
 ## RBAC Scopes
 
-Scopes are defined in `agentmail/pkg/auth/scopes.go`.
+Scopes are defined in `nGX/pkg/auth/scopes.go`.
 
 | Scope | Grants |
 |-------|--------|

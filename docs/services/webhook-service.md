@@ -1,6 +1,6 @@
 # Webhook Service
 
-**Module**: `agentmail/services/webhook-service`
+**Module**: `nGX/services/webhook-service`
 **Role**: Reliable HTTP delivery of events to customer-registered endpoints with exponential backoff retry.
 
 ## Delivery Flow
@@ -24,11 +24,11 @@ Deliverer.Deliver(ctx, webhook, payloadBytes)
 ## Request Format
 
 ```http
-POST https://your-endpoint.com/webhooks/agentmail
+POST https://your-endpoint.com/webhooks/nGX
 Content-Type: application/json
-X-AgentMail-Signature: sha256=<hmac-hex>
-X-AgentMail-Event: webhook.delivery
-User-Agent: AgentMail-Webhook/1.0
+X-nGX-Signature: sha256=<hmac-hex>
+X-nGX-Event: webhook.delivery
+User-Agent: nGX-Webhook/1.0
 
 { ...event JSON... }
 ```
@@ -37,7 +37,7 @@ The HTTP client has a 30-second timeout per delivery attempt.
 
 ## Signature Verification
 
-`X-AgentMail-Signature` contains `sha256=` followed by the HMAC-SHA256 hex digest of the raw request body, keyed by the webhook's secret.
+`X-nGX-Signature` contains `sha256=` followed by the HMAC-SHA256 hex digest of the raw request body, keyed by the webhook's secret.
 
 **Verification in Go**:
 ```go
@@ -96,7 +96,7 @@ LIMIT 100
 
 ## Idempotency
 
-Each event has a stable `event_id` (ULID). Consumer endpoints should store processed event IDs and skip duplicates. AgentMail guarantees at-least-once delivery — the same event may be delivered more than once if a retry occurs after a transient failure on either side.
+Each event has a stable `event_id` (ULID). Consumer endpoints should store processed event IDs and skip duplicates. nGX guarantees at-least-once delivery — the same event may be delivered more than once if a retry occurs after a transient failure on either side.
 
 ## Delivery Statuses
 

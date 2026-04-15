@@ -1,6 +1,6 @@
 # API Gateway
 
-**Module**: `agentmail/services/api`
+**Module**: `nGX/services/api`
 **Port**: `8080`
 **Role**: External-facing REST API and WebSocket hub. Authenticates all requests, enforces RBAC, and proxies to internal services.
 

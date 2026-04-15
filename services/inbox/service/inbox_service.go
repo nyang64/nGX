@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"agentmail/pkg/auth"
@@ -37,15 +38,36 @@ type InboxService struct {
 	pool       *pgxpool.Pool
 	inboxStore store.InboxStore
 	producer   *kafka.Producer
+	mailDomain string // default domain for inbox provisioning (from MAIL_DOMAIN)
 }
 
 // NewInboxService creates a new InboxService.
-func NewInboxService(pool *pgxpool.Pool, inboxStore store.InboxStore, producer *kafka.Producer) *InboxService {
-	return &InboxService{pool: pool, inboxStore: inboxStore, producer: producer}
+// mailDomain is the installation-configured default domain (e.g. "mail.acme.com").
+// When an address is supplied without a domain (no "@"), mailDomain is appended automatically.
+func NewInboxService(pool *pgxpool.Pool, inboxStore store.InboxStore, producer *kafka.Producer, mailDomain string) *InboxService {
+	return &InboxService{pool: pool, inboxStore: inboxStore, producer: producer, mailDomain: mailDomain}
+}
+
+// resolveInboxAddress returns the full email address for inbox provisioning.
+// If address contains "@" it is used as-is. Otherwise mailDomain is appended.
+// Returns an error if address has no domain and mailDomain is not configured.
+func resolveInboxAddress(address, mailDomain string) (string, error) {
+	if strings.Contains(address, "@") {
+		return address, nil
+	}
+	if mailDomain == "" {
+		return "", fmt.Errorf("address %q has no domain and MAIL_DOMAIN is not configured", address)
+	}
+	return address + "@" + mailDomain, nil
 }
 
 // Create provisions a new inbox.
 func (s *InboxService) Create(ctx context.Context, claims *auth.Claims, req CreateInboxRequest) (*models.Inbox, error) {
+	address, err := resolveInboxAddress(req.Address, s.mailDomain)
+	if err != nil {
+		return nil, err
+	}
+
 	// For pod-scoped keys, default to and enforce the key's pod.
 	podID := req.PodID
 	if claims.PodID != nil {
@@ -60,7 +82,7 @@ func (s *InboxService) Create(ctx context.Context, claims *auth.Claims, req Crea
 		ID:          uuid.New(),
 		OrgID:       claims.OrgID,
 		PodID:       podID,
-		Email:       req.Address,
+		Email:       address,
 		DisplayName: req.DisplayName,
 		Status:      models.InboxStatusActive,
 		Settings:    req.Settings,
@@ -71,7 +93,7 @@ func (s *InboxService) Create(ctx context.Context, claims *auth.Claims, req Crea
 		inbox.Settings = map[string]any{}
 	}
 
-	err := dbpkg.WithOrgPodTx(ctx, s.pool, claims.OrgID, claims.PodID, func(tx pgx.Tx) error {
+	err = dbpkg.WithOrgPodTx(ctx, s.pool, claims.OrgID, claims.PodID, func(tx pgx.Tx) error {
 		return s.inboxStore.Create(ctx, tx, inbox)
 	})
 	if err != nil {

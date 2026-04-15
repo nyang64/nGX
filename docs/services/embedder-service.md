@@ -1,6 +1,6 @@
 # Embedder Service
 
-**Module**: `agentmail/services/embedder`
+**Module**: `nGX/services/embedder`
 **Port**: none (Kafka consumer only)
 **Role**: Asynchronously generates semantic embeddings for email messages and stores them in PostgreSQL for use by the search service.
 
@@ -108,9 +108,9 @@ Skipping rather than retrying ensures a transient embedding server outage does n
 |---------|---------|-------------|
 | `DATABASE_URL` | `postgres://...` | PostgreSQL connection string |
 | `KAFKA_BROKERS` | `localhost:9092` | Comma-separated Kafka broker list |
-| `KAFKA_GROUP_ID` | `agentmail` | Consumer group prefix (`-embedder` appended) |
+| `KAFKA_GROUP_ID` | `nGX` | Consumer group prefix (`-embedder` appended) |
 | `S3_ENDPOINT` | `http://localhost:9000` | S3 / MinIO endpoint |
-| `S3_BUCKET` | `agentmail` | Bucket containing message bodies |
+| `S3_BUCKET` | `nGX` | Bucket containing message bodies |
 | `S3_ACCESS_KEY_ID` | `minioadmin` | S3 access key |
 | `S3_SECRET_ACCESS_KEY` | `minioadmin` | S3 secret key |
 | `S3_USE_PATH_STYLE` | `true` | Set `true` for MinIO; `false` for AWS S3 |

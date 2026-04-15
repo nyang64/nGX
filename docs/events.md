@@ -1,6 +1,6 @@
 # Event System
 
-AgentMail uses Kafka as the event backbone. Every significant state change emits an event that downstream services consume asynchronously.
+nGX uses Kafka as the event backbone. Every significant state change emits an event that downstream services consume asynchronously.
 
 ## Kafka Topics
 
@@ -154,7 +154,7 @@ Note: the actual `BaseEvent` struct in `pkg/events/types.go` uses `occurred_at` 
 {
   "data": {
     "inbox_id": "uuid",
-    "email_address": "agent@acme.agentmail.io",
+    "email_address": "agent@acme.nGX.io",
     "pod_id": "uuid"
   }
 }
@@ -209,7 +209,7 @@ clients for that org         |
 Connect with a valid API key as the token query parameter:
 
 ```javascript
-const ws = new WebSocket('wss://api.agentmail.io/v1/ws?token=am_live_...');
+const ws = new WebSocket('wss://api.nGX.io/v1/ws?token=am_live_...');
 
 ws.onopen = () => console.log('connected');
 ws.onmessage = (e) => {
@@ -244,11 +244,11 @@ The server sends WebSocket ping frames periodically. Most WebSocket libraries re
 ### Registering a Webhook
 
 ```bash
-curl -X POST https://api.agentmail.io/v1/webhooks \
+curl -X POST https://api.nGX.io/v1/webhooks \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "url": "https://your-server.com/webhooks/agentmail",
+    "url": "https://your-server.com/webhooks/nGX",
     "events": ["message.received", "draft.created"]
   }'
 ```
@@ -261,7 +261,7 @@ Optional scope filters in the registration body:
 
 ### Verifying Signatures
 
-Every webhook request includes `X-AgentMail-Signature: sha256=<hmac>`. The HMAC is computed over the raw request body using the webhook secret.
+Every webhook request includes `X-nGX-Signature: sha256=<hmac>`. The HMAC is computed over the raw request body using the webhook secret.
 
 **Python**:
 ```python
@@ -277,10 +277,10 @@ def verify_signature(secret: str, payload: bytes, header: str) -> bool:
     return hmac.compare_digest(expected, header)
 
 # Flask / FastAPI example
-@app.post("/webhooks/agentmail")
+@app.post("/webhooks/nGX")
 async def handle_webhook(request: Request):
     payload = await request.body()
-    sig = request.headers.get("X-AgentMail-Signature", "")
+    sig = request.headers.get("X-nGX-Signature", "")
     if not verify_signature(WEBHOOK_SECRET, payload, sig):
         raise HTTPException(status_code=401, detail="invalid signature")
     event = json.loads(payload)
@@ -300,10 +300,10 @@ func VerifySignature(secret string, payload []byte, header string) bool {
 
 ### Responding to Webhooks
 
-Return any `2xx` status within 30 seconds (hardcoded delivery timeout). AgentMail treats any non-2xx response as a failure and schedules a retry.
+Return any `2xx` status within 30 seconds (hardcoded delivery timeout). nGX treats any non-2xx response as a failure and schedules a retry.
 
 ```python
-@app.post("/webhooks/agentmail")
+@app.post("/webhooks/nGX")
 async def handle(request: Request):
     payload = await request.body()
     # ... verify signature ...
@@ -316,7 +316,7 @@ async def handle(request: Request):
 
 ## Idempotency
 
-Each event has a unique `id` (UUID). AgentMail guarantees **at-least-once delivery** — your endpoint may receive the same event more than once during retries. Store processed `event_id` values to deduplicate:
+Each event has a unique `id` (UUID). nGX guarantees **at-least-once delivery** — your endpoint may receive the same event more than once during retries. Store processed `event_id` values to deduplicate:
 
 ```python
 # In production, use Redis or a database table instead of a set

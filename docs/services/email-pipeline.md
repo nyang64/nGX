@@ -1,6 +1,6 @@
 # Email Pipeline
 
-**Module**: `agentmail/services/email-pipeline`
+**Module**: `nGX/services/email-pipeline`
 **SMTP Port**: `:2525` (local dev), `:25` (production)
 **Role**: Receives inbound SMTP email and delivers outbound email via direct MX SMTP. Both directions use Kafka as the async work queue.
 
@@ -196,7 +196,7 @@ services/email-pipeline/inbound/processor.go  InboundConsumer
        emailauth.CheckDMARC(fromDomain, spfResult, dkimResult)
        → looks up _dmarc.{domain} TXT record; evaluates alignment
        DMARCReject      → discard message silently; commit Kafka offset; return
-       DMARCQuarantine  → continue; X-AgentMail-Spam: true will be set in headers
+       DMARCQuarantine  → continue; X-nGX-Spam: true will be set in headers
        DMARCNone / Pass → continue normally
 
  13. For each recipient address in job.To[]
@@ -235,10 +235,10 @@ services/email-pipeline/inbound/processor.go  InboundConsumer
                 INSERT Thread record
 
             Merge auth results into headers JSONB (stored with message; no schema change):
-              X-AgentMail-SPF:   {spf_result}     (from Stage 1)
-              X-AgentMail-DKIM:  {dkim_result}    (from Step 10)
-              X-AgentMail-DMARC: {disposition}    (from Step 12, if checked)
-              X-AgentMail-Spam:  true             (only if DMARC quarantine)
+              X-nGX-SPF:   {spf_result}     (from Stage 1)
+              X-nGX-DKIM:  {dkim_result}    (from Step 10)
+              X-nGX-DMARC: {disposition}    (from Step 12, if checked)
+              X-nGX-Spam:  true             (only if DMARC quarantine)
 
             INSERT Message record:
               direction  = inbound
@@ -309,8 +309,8 @@ If `FindThreadByMessageIDs` returns `not found` (or any `IsNotFound` error), the
 | SMTP_RELAY_HOST | (empty) | If set, bypass MX lookup and relay to this host:port (e.g. `localhost:1025` for MailHog in dev) |
 | DATABASE_URL | postgres://... | Postgres connection |
 | KAFKA_BROKERS | localhost:9092 | Kafka brokers for all producers and consumers |
-| KAFKA_GROUP_ID | agentmail | Base consumer group ID; `-inbound` and `-outbound` suffixes are appended |
+| KAFKA_GROUP_ID | nGX | Base consumer group ID; `-inbound` and `-outbound` suffixes are appended |
 | S3_ENDPOINT | http://localhost:9000 | MinIO/S3 endpoint |
-| S3_BUCKET | agentmail | Object storage bucket |
+| S3_BUCKET | nGX | Object storage bucket |
 | S3_ACCESS_KEY_ID | minioadmin | S3 credentials |
 | S3_SECRET_ACCESS_KEY | minioadmin | S3 credentials |

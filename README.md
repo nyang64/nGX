@@ -1,10 +1,10 @@
-# AgentMail
+# nGX
 
 Email infrastructure purpose-built for AI agents — programmable inboxes, real-time events, multi-tenancy, and a first-class REST API.
 
 ## What It Is
 
-AgentMail gives AI agents a real email address they can send and receive mail through, with a clean API that doesn't require IMAP/SMTP knowledge. You create inboxes programmatically, receive events in real-time over WebSocket or webhooks, and build human-in-the-loop review flows using the draft system.
+nGX gives AI agents a real email address they can send and receive mail through, with a clean API that doesn't require IMAP/SMTP knowledge. You create inboxes programmatically, receive events in real-time over WebSocket or webhooks, and build human-in-the-loop review flows using the draft system.
 
 ## Features
 
@@ -67,7 +67,7 @@ AgentMail gives AI agents a real email address they can send and receive mail th
 ```
 Organization  (billing root, holds API keys)
   └── Pod     (isolated namespace — maps to a sub-customer or product)
-        └── Inbox  (email address: agent@pod.agentmail.io)
+        └── Inbox  (email address: agent@pod.nGX.io)
               └── Thread  (conversation, grouped by In-Reply-To/References)
                     └── Message  (individual email, inbound or outbound)
                           └── Attachment
@@ -175,7 +175,7 @@ curl http://localhost:8080/v1/inboxes/<inbox-id>/threads \
 ## Project Structure
 
 ```
-agentmail/
+nGX/
 ├── api/                  # OpenAPI 3.1 specification
 ├── configs/              # Postgres init, Kafka topics, Nginx
 ├── docs/                 # This documentation

@@ -52,7 +52,7 @@ func main() {
 	labelStore := store.NewPostgresLabelStore(pool)
 
 	// Build services.
-	inboxSvc := service.NewInboxService(pool, inboxStore, eventProducer)
+	inboxSvc := service.NewInboxService(pool, inboxStore, eventProducer, cfg.MailDomain)
 	threadSvc := service.NewThreadService(pool, threadStore, inboxStore, eventProducer)
 	messageSvc := service.NewMessageService(pool, messageStore, threadStore, inboxStore, outboundProducer)
 	draftSvc := service.NewDraftService(pool, draftStore, messageStore, threadStore, inboxStore, eventProducer, outboundProducer)

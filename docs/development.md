@@ -261,7 +261,7 @@ curl -s -X POST http://localhost:8080/v1/inboxes/$INBOX/messages/send \
   -H "Content-Type: application/json" \
   -d '{
     "to": [{"email":"test@example.com","name":"Test"}],
-    "subject": "Hello from AgentMail",
+    "subject": "Hello from nGX",
     "body_text": "This is a test email.",
     "body_html": "<p>This is a test email.</p>"
   }' | jq .
@@ -330,7 +330,7 @@ A quick end-to-end smoke test that verifies every layer of the stack: auth, send
 Run the seed script to create a test org, pod, inbox, and API key:
 
 ```bash
-psql $DATABASE_URL -f /tmp/agentmail_seed.sql
+psql $DATABASE_URL -f /tmp/nGX_seed.sql
 # Or inline:
 psql $DATABASE_URL <<'EOF'
 DO $$
@@ -469,6 +469,7 @@ The semantic search query "payment past due" retrieves the "Invoice #1042 overdu
 | `ENVIRONMENT` | `development` | Runtime environment: `development` \| `staging` \| `production` |
 | `LOG_LEVEL` | `debug` | Log verbosity: `debug` \| `info` \| `warn` \| `error` |
 | `LOG_FORMAT` | `text` | Log format: `text` (dev) \| `json` (production) |
+| `MAIL_DOMAIN` | _(empty — required)_ | Default domain for inbox provisioning (e.g. `mail.yourdomain.com`). When an inbox is created with a username-only address (no `@`), this domain is appended automatically. Must be set in production. |
 
 ### Database
 
@@ -529,8 +530,8 @@ Auth (port 8081), inbox (port 8082), and search (port 8084) services listen on h
 | `SMTP_HOSTNAME` | `localhost` | Domain claimed in SMTP EHLO |
 | `SMTP_RELAY_HOST` | _(empty)_ | When set, all outbound mail is delivered to this `host:port` instead of doing live MX lookups. Set to `localhost:1025` in dev to route through Mailhog. Leave empty in production for real MX delivery. |
 | `DKIM_PRIVATE_KEY_PEM` | _(empty)_ | PEM-encoded RSA/Ed25519 private key for DKIM signing (leave empty to disable) |
-| `DKIM_SELECTOR` | `agentmail1` | DNS selector label for DKIM |
-| `DKIM_DOMAIN` | _(empty)_ | Signing domain; must match the `From` domain |
+| `DKIM_SELECTOR` | `mail` | DNS selector label for DKIM (publish public key at `{DKIM_SELECTOR}._domainkey.{DKIM_DOMAIN}`) |
+| `DKIM_DOMAIN` | _(empty)_ | Signing domain; must match `MAIL_DOMAIN` or a verified custom domain |
 
 ### Auth
 

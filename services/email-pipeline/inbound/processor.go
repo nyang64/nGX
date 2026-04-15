@@ -268,13 +268,13 @@ func (c *InboundConsumer) processForRecipient(
 		if hdrs == nil {
 			hdrs = make(map[string][]string)
 		}
-		hdrs["X-AgentMail-SPF"] = []string{string(auth.SPF)}
-		hdrs["X-AgentMail-DKIM"] = []string{string(auth.DKIM)}
+		hdrs["X-nGX-SPF"] = []string{string(auth.SPF)}
+		hdrs["X-nGX-DKIM"] = []string{string(auth.DKIM)}
 		if auth.DMARC != "" {
-			hdrs["X-AgentMail-DMARC"] = []string{string(auth.DMARC)}
+			hdrs["X-nGX-DMARC"] = []string{string(auth.DMARC)}
 		}
 		if auth.DMARC == emailauth.DMARCQuarantine {
-			hdrs["X-AgentMail-Spam"] = []string{"true"}
+			hdrs["X-nGX-Spam"] = []string{"true"}
 		}
 
 		message = &models.Message{

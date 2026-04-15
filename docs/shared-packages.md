@@ -1,6 +1,6 @@
 # Shared Packages (`pkg/`)
 
-The `pkg/` directory is a single Go module (`agentmail/pkg`) shared across all services. The rule: if two or more services need it, it goes in `pkg/`. Services never import each other.
+The `pkg/` directory is a single Go module (`nGX/pkg`) shared across all services. The rule: if two or more services need it, it goes in `pkg/`. Services never import each other.
 
 ## pkg/config
 
@@ -449,7 +449,7 @@ logger := telemetry.SetupLogger(cfg.LogLevel, cfg.LogFormat)
 slog.SetDefault(logger)
 
 // OpenTelemetry (no-op if OTEL_ENDPOINT is empty)
-shutdown, err := telemetry.Setup(ctx, "agentmail-api", cfg.OTEL.Endpoint)
+shutdown, err := telemetry.Setup(ctx, "nGX-api", cfg.OTEL.Endpoint)
 defer shutdown(ctx)
 ```
 

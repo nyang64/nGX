@@ -1,6 +1,6 @@
 # Search Service
 
-**Module**: `agentmail/services/search`
+**Module**: `nGX/services/search`
 **Port**: `8084`
 **Role**: Keyword and semantic search across email messages using PostgreSQL `tsvector` (keyword) and `pgvector` HNSW (semantic).
 
