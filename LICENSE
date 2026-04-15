@@ -1,0 +1,116 @@
+nGX Commercial Source License
+Version 1.0, April 2026
+
+Copyright (c) 2026 nyklabs.com. All rights reserved.
+
+TERMS AND CONDITIONS
+
+1. DEFINITIONS
+
+"Software" means the nGX software and all associated source code, binaries,
+documentation, and configuration files distributed under this License.
+
+"Licensor" means nyklabs.com.
+
+"You" means the individual or legal entity exercising rights under this License.
+
+"Non-Commercial Use" means personal, academic, research, or open-source project
+use where no revenue is generated and no business operations depend on the
+Software. Internal evaluation by a for-profit entity solely for the purpose of
+assessing whether to obtain a commercial license is also considered
+Non-Commercial Use, provided the evaluation period does not exceed 90 days and
+the Software is not used in production.
+
+"Commercial Use" means any use of the Software in a for-profit context,
+including but not limited to: internal business operations, production
+deployments, integration into commercial products or services, or any use that
+directly or indirectly supports revenue-generating activities.
+
+"Managed Service" means making the Software or a substantially similar system
+available to third parties as a hosted, cloud-based, or software-as-a-service
+offering, whether or not a fee is charged.
+
+2. NON-COMMERCIAL USE GRANT
+
+Subject to the terms of this License, Licensor grants You a non-exclusive,
+non-transferable, royalty-free right to use, copy, modify, and run the Software
+solely for Non-Commercial Use.
+
+3. COMMERCIAL USE — LICENSE REQUIRED
+
+Any Commercial Use of the Software requires a separate written commercial
+license agreement with nyklabs.com. To obtain a commercial license, contact:
+
+  licensing@nyklabs.com
+
+Use of the Software for Commercial Use without a valid commercial license
+agreement is a material breach of this License and infringes Licensor's
+intellectual property rights.
+
+4. MANAGED SERVICE RESTRICTION
+
+Notwithstanding any other provision of this License, You may NOT offer,
+operate, or provide the Software — or any product or service that is
+substantially derived from or powered by the Software — as a Managed Service
+to any third party. This restriction applies regardless of whether such
+offering is commercial or free of charge.
+
+The exclusive right to offer nGX as a cloud-hosted or managed service is
+reserved solely for nyklabs.com.
+
+5. REDISTRIBUTION
+
+You may redistribute unmodified copies of the Software for Non-Commercial Use,
+provided that:
+
+  (a) this License is included in its entirety with every copy;
+  (b) all copyright and attribution notices are preserved; and
+  (c) the recipient is made aware that Commercial Use requires a separate license.
+
+You may not sublicense the Software or grant any rights beyond those expressly
+stated in this License.
+
+6. MODIFICATIONS
+
+You may create modifications or derivative works of the Software for
+Non-Commercial Use. Modifications intended for Commercial Use require a
+commercial license. You retain copyright in your modifications, but grant
+Licensor a perpetual, worldwide, royalty-free license to incorporate them into
+the Software.
+
+7. INTELLECTUAL PROPERTY
+
+The Software, including all copies and derivative works, remains the exclusive
+intellectual property of nyklabs.com. This License does not convey any
+ownership rights.
+
+8. NO WARRANTY
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE, OR NON-INFRINGEMENT. THE ENTIRE RISK AS TO THE
+QUALITY AND PERFORMANCE OF THE SOFTWARE IS WITH YOU.
+
+9. LIMITATION OF LIABILITY
+
+IN NO EVENT SHALL NYKLABS.COM BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING LOST PROFITS, BUSINESS
+INTERRUPTION, OR LOSS OF DATA) ARISING OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THIS LICENSE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+10. TERMINATION
+
+This License terminates automatically if You breach any of its terms. Upon
+termination You must destroy all copies of the Software in your possession.
+Sections 4, 7, 8, 9, and 10 survive termination.
+
+11. GOVERNING LAW
+
+This License is governed by the laws of the State of Delaware, United States,
+without regard to conflict-of-law principles. Any disputes shall be resolved
+exclusively in the state or federal courts located in Delaware.
+
+---
+
+For licensing inquiries: licensing@nyklabs.com
+For general information: https://nyklabs.com

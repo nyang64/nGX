@@ -35,21 +35,21 @@ nGX is designed for enterprises that want the capabilities of a managed email pl
                     │  REST API  │  WebSocket  │  SMTP    │
                     └─────────────────┬───────────────────┘
                                       │
-                    ┌─────────────────▼───────────────────┐
+                    ┌────────-─────────▼───────────────────┐
                     │         API GATEWAY :8080            │
                     │  Auth · Rate Limit · CORS · Routing  │
-                    └──┬──────────┬──────────┬────────────┘
+                    └──┬──────────┬──────────┬────-────────┘
                        │          │          │
-          ┌────────────▼──┐  ┌────▼───┐  ┌──▼──────────┐
+          ┌──────────-─▼─-┐  ┌────▼───┐  ┌──▼────────-──┐
           │  Auth :8081   │  │ Inbox  │  │  Search      │
           │  API Key CRUD │  │ :8082  │  │  :8084       │
-          └───────────────┘  └────┬───┘  └─────────────┘
+          └───────────────┘  └────┬───┘  └────────────-─┘
                                   │
-          ┌───────────────────────▼──────────────────────┐
+          ┌───────────────────────▼───────────-───────────┐
           │                  KAFKA                        │
-          │  email.inbound.raw · email.outbound.queue      │
+          │  email.inbound.raw · email.outbound.queue     │
           │  events.fanout · webhooks.delivery            │
-          └──────┬────────────────────┬──────────────────┘
+          └──────┬────────────────────┬─────────────────-─┘
                  │                    │
     ┌────────────▼──────┐   ┌─────────▼──────────┐
     │  Email Pipeline   │   │  Event Dispatcher  │
@@ -58,10 +58,10 @@ nGX is designed for enterprises that want the capabilities of a managed email pl
     └───────────────────┘           │
                             ┌───────┴──────────────┐
                             │                      │
-               ┌────────────▼──────┐  ┌────────────▼──────┐
+               ┌────────────▼──────┐  ┌────────────▼─────-─┐
                │ Webhook Service   │  │  Redis Pub/Sub     │
                │ HTTP delivery     │  │  (WS hub)          │
-               └───────────────────┘  └───────────────────┘
+               └───────────────────┘  └────────────────-───┘
 
   Data Stores (all self-hosted)
   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
@@ -324,5 +324,13 @@ Common make targets:
 | [golangci-lint](https://golangci-lint.run) | Go linter |
 
 ---
+
+## License
+
+nGX is source-available software licensed under the [nGX Commercial Source License](LICENSE).
+
+- **Free** for non-commercial use, evaluation, and internal assessment (up to 90 days)
+- **Commercial license required** for production or business use — contact [licensing@nyklabs.com](mailto:licensing@nyklabs.com)
+- **Managed service rights reserved** — only nyklabs.com may offer nGX as a hosted or cloud service
 
 Copyright (c) 2026 [nyklabs.com](https://nyklabs.com). All rights reserved.
