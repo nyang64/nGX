@@ -10,8 +10,9 @@ Hosted email-for-agents services give your AI agents email addresses on a vendor
 - **You own the data** — email bodies, attachments, and thread history stay in your PostgreSQL and S3
 - **You own the keys** — DKIM signing uses your private keys; SPF and DMARC point to your DNS
 - **No per-seat subscription** — deploy for as many agents as your hardware supports
+- **Regulatory compliance** — email content never leaves your environment; meet HIPAA, GDPR, SOC 2, and industry-specific data residency requirements without negotiating a vendor BAA or DPA
 
-nGX is designed for enterprises that want the capabilities of a managed email platform without the vendor lock-in.
+nGX is designed for enterprises that want the capabilities of a managed email platform without the vendor lock-in or the compliance risk of routing sensitive communications through a third-party SaaS.
 
 ## Features
 
