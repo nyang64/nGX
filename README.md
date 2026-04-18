@@ -1,12 +1,12 @@
 # nGX
 
-**Self-hosted email infrastructure for AI agents.** Deploy on your own domain, your own servers. Your agents get real email addresses at `agent@mail.yourdomain.com` — not `agent@somevendor.to`.
+**Self-hosted email infrastructure for AI agents.** Deploy on your own domain, your own servers. Your agents get real email addresses at `agent@yourdomain.com` — not `agent@somevendor.to`.
 
 ## Why nGX
 
 Hosted email-for-agents services give your AI agents email addresses on a vendor's domain. You depend on their uptime, their pricing, and their data policies. nGX is the alternative: a complete email platform you install in your own infrastructure, on your own domain.
 
-- **You own the domain** — configure `MAIL_DOMAIN=mail.yourdomain.com` and every inbox provisions under your domain
+- **You own the domain** — configure `MAIL_DOMAIN=yourdomain.com` and every inbox provisions under your domain
 - **You own the data** — email bodies, attachments, and thread history stay in your PostgreSQL and S3
 - **You own the keys** — DKIM signing uses your private keys; SPF and DMARC point to your DNS
 - **No per-seat subscription** — deploy for as many agents as your hardware supports
@@ -75,7 +75,7 @@ nGX is designed for enterprises that want the capabilities of a managed email pl
 ```
 Organization  (billing root, holds API keys)
   └── Pod     (isolated namespace — maps to a sub-customer or product)
-        └── Inbox  (email address: agent@mail.yourdomain.com)
+        └── Inbox  (email address: agent@yourdomain.com)
               └── Thread  (conversation, grouped by In-Reply-To/References)
                     └── Message  (individual email, inbound or outbound)
                           └── Attachment
@@ -112,8 +112,10 @@ Before starting, set your mail domain. This is what all inboxes will be provisio
 ```bash
 cp .env.example .env
 # Edit .env and set:
-#   MAIL_DOMAIN=mail.yourdomain.com
-#   DKIM_DOMAIN=mail.yourdomain.com
+#   MAIL_DOMAIN=yourdomain.com        # domain part of email addresses, e.g. agent@yourdomain.com
+#   SMTP_HOSTNAME=mail.yourdomain.com # hostname of your mail server (A record, MX, PTR)
+#   DKIM_DOMAIN=yourdomain.com        # must match MAIL_DOMAIN
+#   DKIM_SELECTOR=mail                # matches DNS record: mail._domainkey.yourdomain.com
 ```
 
 For local development you can leave `MAIL_DOMAIN` empty and supply full addresses (e.g. `agent@localhost`) when creating inboxes.
@@ -179,7 +181,7 @@ curl -X POST http://localhost:8080/v1/pods \
 curl -X POST http://localhost:8080/v1/inboxes \
   -H "Authorization: Bearer $KEY" \
   -d '{"pod_id":"<pod-id>","address":"agent"}'
-# → inbox.email will be "agent@mail.yourdomain.com"
+# → inbox.email will be "agent@yourdomain.com"
 ```
 
 ### 5. Send and receive email
@@ -200,17 +202,20 @@ curl http://localhost:8080/v1/inboxes/<inbox-id>/threads \
 For a production self-hosted deployment you need:
 
 1. **DNS records on your domain**
-   - MX record: `mail.yourdomain.com` → your server IP
-   - SPF TXT: `v=spf1 ip4:<your-ip> -all`
-   - DKIM TXT: publish the public key matching your `DKIM_PRIVATE_KEY`
-   - DMARC TXT: `v=DMARC1; p=quarantine; rua=mailto:dmarc@yourdomain.com`
+   - A record: `mail.yourdomain.com` → your server IP
+   - MX record: `yourdomain.com` → `mail.yourdomain.com`
+   - SPF TXT: `v=spf1 a:mail.yourdomain.com ~all`
+   - DKIM TXT: `mail._domainkey.yourdomain.com` → publish public key matching your `DKIM_PRIVATE_KEY_PEM`
+   - DMARC TXT: `v=DMARC1; p=none; rua=mailto:admin@yourdomain.com`
+   - PTR record: your server IP → `mail.yourdomain.com` (set via your VPS/cloud provider)
 
 2. **Environment variables** (see `.env.example` for full reference)
    ```
-   MAIL_DOMAIN=mail.yourdomain.com
-   DKIM_DOMAIN=mail.yourdomain.com
+   MAIL_DOMAIN=yourdomain.com
+   SMTP_HOSTNAME=mail.yourdomain.com
+   DKIM_DOMAIN=yourdomain.com
    DKIM_SELECTOR=mail
-   DKIM_PRIVATE_KEY=<base64-encoded RSA private key>
+   DKIM_PRIVATE_KEY_PEM=<PEM-encoded RSA private key>
    DATABASE_URL=postgres://...
    ```
 
