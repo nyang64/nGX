@@ -1,3 +1,8 @@
+-- Copyright (c) 2026 nyklabs.com. All rights reserved.
+--
+-- Licensed under the nGX Commercial Source License v1.0.
+-- See LICENSE file in the project root for full license information.
+
 -- Tighten inbox RLS to enforce pod-level isolation when a pod-scoped API key is
 -- in use. The transaction sets app.current_pod_id to either the pod UUID string
 -- or an empty string (for org-wide keys). An empty value means "no restriction".
