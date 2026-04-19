@@ -136,18 +136,16 @@ make migrate-up  # applies all database migrations
 ### 3. Start services
 
 ```bash
-# Terminal 1 — core services
-go run ./services/auth       &  # :8081
-go run ./services/inbox      &  # :8082
-go run ./services/api           # :8080
-
-# Terminal 2 — pipeline + events
+# Start all services in the background
+go run ./services/auth                              &  # :8081
+go run ./services/inbox                             &  # :8082
+go run ./services/api                               &  # :8080
 go run ./services/email-pipeline/cmd/email-pipeline &
 go run ./services/event-dispatcher                  &
 go run ./services/webhook-service                   &
 go run ./services/scheduler                         &
 go run ./services/embedder                          &
-go run ./services/search                              # :8084
+go run ./services/search                            &  # :8084
 ```
 
 Or use the Makefile hot-reload target for the API:
