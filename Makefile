@@ -17,7 +17,7 @@ DC        := docker compose
 
 # Go tools
 GOLANGCI  := golangci-lint
-MIGRATE   := go run ./tools/migrate
+MIGRATE   := env $(shell grep -v '^\#' .env | grep -v '^$$' | xargs) go run ./tools/migrate
 
 # Build info
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
