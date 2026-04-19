@@ -15,7 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// DraftExpiry expires drafts whose scheduled_at (expires_at) has passed while
+// DraftExpiry expires drafts whose expires_at has passed while
 // still in 'pending' review status.
 type DraftExpiry struct {
 	pool *pgxpool.Pool
@@ -26,11 +26,11 @@ func NewDraftExpiry(pool *pgxpool.Pool) *DraftExpiry {
 	return &DraftExpiry{pool: pool}
 }
 
-// Run expires pending drafts that are past their scheduled send time.
+// Run expires pending drafts that are past their expires_at time.
 func (j *DraftExpiry) Run(ctx context.Context) {
 	slog.Debug("draft expiry running")
 
-	// Drafts with a scheduled_at in the past and still pending review are
+	// Drafts with an expires_at in the past and still pending review are
 	// considered expired: they can no longer be approved in time.
 	q := `
 		UPDATE drafts
@@ -38,8 +38,8 @@ func (j *DraftExpiry) Run(ctx context.Context) {
 		    review_note   = 'expired: scheduled send time has passed',
 		    updated_at    = NOW()
 		WHERE review_status = 'pending'
-		  AND scheduled_at IS NOT NULL
-		  AND scheduled_at < NOW()
+		  AND expires_at IS NOT NULL
+		  AND expires_at < NOW()
 	`
 	tag, err := j.pool.Exec(ctx, q)
 	if err != nil {
