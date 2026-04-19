@@ -238,7 +238,11 @@ curl http://${SMTP_HOSTNAME}:8080/v1/inboxes/<inbox-id>/threads \
 
 ```bash
 # Stop all background Go services
-pkill -f 'go run ./services'
+# (go run spawns a child binary in /tmp — kill both parent and child)
+pkill -f 'go run ./services' 2>/dev/null || true
+for svc in scheduler auth inbox api search embedder event-dispatcher webhook-service email-pipeline; do
+  pkill -f "exe/$svc" 2>/dev/null || true
+done
 
 # Stop all infrastructure containers
 make down
