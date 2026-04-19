@@ -88,6 +88,8 @@ func (h *APIKeyHandler) CreateKey(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errResp("invalid request body"))
 		return
 	}
+	// Inject org_id from authenticated claims — callers must not supply it.
+	body["org_id"] = claims.OrgID.String()
 	data, status, err := h.proxy.do(r.Context(), http.MethodPost, "/api-keys", body, claims.OrgID.String())
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, errResp(err.Error()))
