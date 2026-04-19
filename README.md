@@ -232,6 +232,14 @@ curl -X POST http://${SMTP_HOSTNAME}:8080/v1/inboxes/<inbox-id>/messages/send \
 # List threads
 curl http://${SMTP_HOSTNAME}:8080/v1/inboxes/<inbox-id>/threads \
   -H "Authorization: Bearer ${API_KEY}"
+
+# Get messages in a thread
+curl http://${SMTP_HOSTNAME}:8080/v1/inboxes/<inbox-id>/threads/<thread-id>/messages \
+  -H "Authorization: Bearer ${API_KEY}"
+
+# Get a specific message
+curl http://${SMTP_HOSTNAME}:8080/v1/inboxes/<inbox-id>/threads/<thread-id>/messages/<message-id> \
+  -H "Authorization: Bearer ${API_KEY}"
 ```
 
 ### 6. Stop services
