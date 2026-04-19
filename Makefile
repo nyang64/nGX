@@ -17,7 +17,8 @@ DC        := docker compose
 
 # Go tools
 GOLANGCI  := golangci-lint
-MIGRATE   := env DATABASE_URL=$(shell grep '^DATABASE_URL=' .env | cut -d= -f2-) go run ./tools/migrate
+DB_ENV    := env DATABASE_URL=$(shell grep '^DATABASE_URL=' .env | cut -d= -f2-)
+MIGRATE   := $(DB_ENV) go run ./tools/migrate
 
 # Build info
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -311,6 +312,10 @@ clean-docker: ## Remove all local Docker images for this project
 # ============================================================
 # Setup
 # ============================================================
+
+.PHONY: bootstrap
+bootstrap: ## Create the first org and admin API key (run once after migrate-up)
+	$(DB_ENV) go run ./tools/bootstrap $(if $(org),-org "$(org)") $(if $(slug),-slug "$(slug)")
 
 .PHONY: setup
 setup: ## Bootstrap local development environment

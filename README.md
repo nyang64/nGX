@@ -175,28 +175,29 @@ make dev-api
 
 ### 4. Create an org and API key
 
+On first run, use the bootstrap tool to create your initial org and admin API key directly in the database:
+
 ```bash
-# Create organization
-curl -X POST http://${SMTP_HOSTNAME}:8080/v1/org \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Acme Corp","slug":"acme"}'
+# Default org name/slug, or pass your own:
+make bootstrap org="My Org" slug="my-org"
 
-# Create API key (save the returned "key" value — shown once)
-curl -X POST http://${SMTP_HOSTNAME}:8080/v1/keys \
-  -H "Authorization: Bearer am_live_BOOTSTRAP_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"dev key","scopes":["org:admin","inbox:read","inbox:write","draft:write"]}'
+# Save the printed API key — it is shown only once
+export KEY=am_live_xxxx
+```
 
-export KEY=am_live_xxxx   # from response
+Then create a pod and inbox via the API:
 
-# Create a pod and inbox
+```bash
+# Create a pod
 curl -X POST http://${SMTP_HOSTNAME}:8080/v1/pods \
   -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
   -d '{"name":"My Product","slug":"my-product"}'
 
 # Provision an inbox — with MAIL_DOMAIN set, just supply the username
 curl -X POST http://${SMTP_HOSTNAME}:8080/v1/inboxes \
   -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
   -d '{"pod_id":"<pod-id>","address":"agent"}'
 # → inbox.email will be "agent@yourdomain.com"
 ```
