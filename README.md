@@ -180,8 +180,9 @@ On first run, use the bootstrap tool to create your initial org and admin API ke
 ```bash
 # This is your master admin key — treat it like a root password.
 # It has full access to all scopes and is used to create all other
-# orgs, pods, inboxes, and API keys. Store it securely.
-# Run only once — re-running will create a duplicate org.
+# pods, inboxes, and API keys for this org. Store it securely.
+# Each run creates a new isolated org with its own admin key.
+# Slug must be unique — re-running with the same slug will fail.
 make bootstrap org="My Org" slug="my-org"
 
 # The key is printed once and never stored in plaintext — save it immediately.
