@@ -72,7 +72,7 @@ func NewAPIKeyHandler(authClient *clients.AuthClient) *APIKeyHandler {
 // ListKeys proxies GET /v1/keys.
 func (h *APIKeyHandler) ListKeys(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromCtx(r)
-	data, status, err := h.proxy.do(r.Context(), http.MethodGet, "/keys", nil, claims.OrgID.String())
+	data, status, err := h.proxy.do(r.Context(), http.MethodGet, "/api-keys", nil, claims.OrgID.String())
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, errResp(err.Error()))
 		return
@@ -88,7 +88,7 @@ func (h *APIKeyHandler) CreateKey(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errResp("invalid request body"))
 		return
 	}
-	data, status, err := h.proxy.do(r.Context(), http.MethodPost, "/keys", body, claims.OrgID.String())
+	data, status, err := h.proxy.do(r.Context(), http.MethodPost, "/api-keys", body, claims.OrgID.String())
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, errResp(err.Error()))
 		return
@@ -104,7 +104,7 @@ func (h *APIKeyHandler) GetKey(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errResp("invalid key ID"))
 		return
 	}
-	data, status, err := h.proxy.do(r.Context(), http.MethodGet, "/keys/"+keyID.String(), nil, claims.OrgID.String())
+	data, status, err := h.proxy.do(r.Context(), http.MethodGet, "/api-keys/"+keyID.String(), nil, claims.OrgID.String())
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, errResp(err.Error()))
 		return
@@ -120,7 +120,7 @@ func (h *APIKeyHandler) RevokeKey(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errResp("invalid key ID"))
 		return
 	}
-	data, status, err := h.proxy.do(r.Context(), http.MethodDelete, "/keys/"+keyID.String(), nil, claims.OrgID.String())
+	data, status, err := h.proxy.do(r.Context(), http.MethodDelete, "/api-keys/"+keyID.String(), nil, claims.OrgID.String())
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, errResp(err.Error()))
 		return
