@@ -103,6 +103,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "emails" {
     id     = "email-retention"
     status = "Enabled"
 
+    filter {}
+
     transition {
       days          = 90
       storage_class = "GLACIER"

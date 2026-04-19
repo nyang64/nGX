@@ -93,6 +93,14 @@ resource "aws_apigatewayv2_stage" "websocket" {
 
   access_log_settings {
     destination_arn = aws_cloudwatch_log_group.websocket_api.arn
+    format = jsonencode({
+      requestId   = "$context.requestId"
+      ip          = "$context.identity.sourceIp"
+      requestTime = "$context.requestTime"
+      routeKey    = "$context.routeKey"
+      status      = "$context.status"
+      errorMessage = "$context.error.message"
+    })
   }
 }
 

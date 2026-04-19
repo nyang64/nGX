@@ -111,12 +111,12 @@ resource "aws_s3_bucket_policy" "ses_write" {
 # ── Outputs ────────────────────────────────────────────────────────────────────
 
 output "ses_dkim_tokens" {
-  description = "Add these 3 CNAME records to DNS to enable DKIM for ${var.mail_domain}"
+  description = "Add these 3 CNAME records to DNS to enable DKIM for your mail domain"
   value       = aws_ses_domain_dkim.main.dkim_tokens
 }
 
 output "ses_verification_token" {
-  description = "Add this TXT record to DNS to verify ${var.mail_domain} in SES"
+  description = "Add this TXT record to DNS to verify your mail domain in SES"
   value       = aws_ses_domain_identity.main.verification_token
 }
 
