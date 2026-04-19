@@ -122,6 +122,25 @@ For local development you can leave `MAIL_DOMAIN` empty and supply full addresse
 
 ### 2. Bootstrap local environment
 
+Generate a DKIM keypair (stored at `configs/dkim.pem` by convention):
+
+```bash
+mkdir -p configs
+openssl genrsa -out configs/dkim.pem 2048
+# Extract public key for your DNS TXT record (mail._domainkey.yourdomain.com)
+openssl rsa -in configs/dkim.pem -pubout -outform der | openssl base64 -A
+```
+
+Load environment variables (do this in every new shell session before starting services):
+
+```bash
+# configs/dkim.pem is the default DKIM private key location
+export DKIM_PRIVATE_KEY_PEM="$(cat configs/dkim.pem)"
+source loadenv.sh
+```
+
+Start infrastructure and run migrations:
+
 ```bash
 make setup       # installs tools, copies .env.example, starts infra, runs migrations
 ```
@@ -158,12 +177,12 @@ make dev-api
 
 ```bash
 # Create organization
-curl -X POST http://localhost:8080/v1/org \
+curl -X POST http://${SMTP_HOSTNAME}:8080/v1/org \
   -H "Content-Type: application/json" \
   -d '{"name":"Acme Corp","slug":"acme"}'
 
 # Create API key (save the returned "key" value — shown once)
-curl -X POST http://localhost:8080/v1/keys \
+curl -X POST http://${SMTP_HOSTNAME}:8080/v1/keys \
   -H "Authorization: Bearer am_live_BOOTSTRAP_KEY" \
   -H "Content-Type: application/json" \
   -d '{"name":"dev key","scopes":["org:admin","inbox:read","inbox:write","draft:write"]}'
@@ -171,12 +190,12 @@ curl -X POST http://localhost:8080/v1/keys \
 export KEY=am_live_xxxx   # from response
 
 # Create a pod and inbox
-curl -X POST http://localhost:8080/v1/pods \
+curl -X POST http://${SMTP_HOSTNAME}:8080/v1/pods \
   -H "Authorization: Bearer $KEY" \
   -d '{"name":"My Product","slug":"my-product"}'
 
 # Provision an inbox — with MAIL_DOMAIN set, just supply the username
-curl -X POST http://localhost:8080/v1/inboxes \
+curl -X POST http://${SMTP_HOSTNAME}:8080/v1/inboxes \
   -H "Authorization: Bearer $KEY" \
   -d '{"pod_id":"<pod-id>","address":"agent"}'
 # → inbox.email will be "agent@yourdomain.com"
@@ -186,12 +205,12 @@ curl -X POST http://localhost:8080/v1/inboxes \
 
 ```bash
 # Send outbound
-curl -X POST http://localhost:8080/v1/inboxes/<inbox-id>/messages/send \
+curl -X POST http://${SMTP_HOSTNAME}:8080/v1/inboxes/<inbox-id>/messages/send \
   -H "Authorization: Bearer $KEY" \
   -d '{"to":[{"email":"test@example.com"}],"subject":"Hello","body_text":"Hi there"}'
 
 # List threads
-curl http://localhost:8080/v1/inboxes/<inbox-id>/threads \
+curl http://${SMTP_HOSTNAME}:8080/v1/inboxes/<inbox-id>/threads \
   -H "Authorization: Bearer $KEY"
 ```
 
