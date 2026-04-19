@@ -178,10 +178,13 @@ make dev-api
 On first run, use the bootstrap tool to create your initial org and admin API key directly in the database:
 
 ```bash
-# Default org name/slug, or pass your own:
+# This is your master admin key — treat it like a root password.
+# It has full access to all scopes and is used to create all other
+# orgs, pods, inboxes, and API keys. Store it securely.
+# Run only once — re-running will create a duplicate org.
 make bootstrap org="My Org" slug="my-org"
 
-# Save the printed API key — it is shown only once
+# The key is printed once and never stored in plaintext — save it immediately.
 export API_KEY=am_live_xxxx
 ```
 
