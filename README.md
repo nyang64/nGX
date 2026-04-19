@@ -185,7 +185,21 @@ make bootstrap org="My Org" slug="my-org"
 export API_KEY=am_live_xxxx
 ```
 
-Then create a pod and inbox via the API:
+Verify your org and create additional scoped keys as needed:
+
+```bash
+# Get your org details
+curl http://${SMTP_HOSTNAME}:8080/v1/org \
+  -H "Authorization: Bearer ${API_KEY}"
+
+# Create a scoped API key for an agent (optional)
+curl -X POST http://${SMTP_HOSTNAME}:8080/v1/keys \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"agent-key","scopes":["inbox:read","inbox:write","draft:write"]}'
+```
+
+Then create a pod and inbox:
 
 ```bash
 # Create a pod
