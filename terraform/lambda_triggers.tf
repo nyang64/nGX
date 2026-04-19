@@ -1,48 +1,7 @@
-# ── Embedder SQS Queue ────────────────────────────────────────────────────────
-# The embedder subscribes to the events-fanout SNS topic via this queue.
-# The SNS subscription itself lives in sns.tf.
-
-resource "aws_sqs_queue" "embedder" {
-  name                       = "${local.prefix}-embedder"
-  message_retention_seconds  = 86400
-  visibility_timeout_seconds = 60
-
-  redrive_policy = jsonencode({
-    deadLetterTargetArn = aws_sqs_queue.embedder_dlq.arn
-    maxReceiveCount     = 3
-  })
-}
-
-resource "aws_sqs_queue" "embedder_dlq" {
-  name                      = "${local.prefix}-embedder-dlq"
-  message_retention_seconds = 1209600
-}
-
-resource "aws_sqs_queue_policy" "embedder" {
-  queue_url = aws_sqs_queue.embedder.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "AllowSNSFanout"
-        Effect = "Allow"
-        Principal = {
-          Service = "sns.amazonaws.com"
-        }
-        Action   = "sqs:SendMessage"
-        Resource = aws_sqs_queue.embedder.arn
-        Condition = {
-          ArnEquals = {
-            "aws:SourceArn" = aws_sns_topic.events_fanout.arn
-          }
-        }
-      }
-    ]
-  })
-}
-
 # ── SQS → Lambda Event Source Mappings ───────────────────────────────────────
+# Embedder queue is now defined in sqs.tf alongside the other queues.
+# All queues use ReportBatchItemFailures so partial batch failures are
+# re-tried without reprocessing successfully handled messages.
 
 resource "aws_lambda_event_source_mapping" "email_inbound" {
   event_source_arn        = aws_sqs_queue.email_inbound.arn
@@ -79,22 +38,22 @@ resource "aws_lambda_event_source_mapping" "embedder" {
   function_response_types = ["ReportBatchItemFailures"]
 }
 
-# ── EventBridge → Lambda Permissions ─────────────────────────────────────────
-# Rules and targets are defined in eventbridge.tf
-
-resource "aws_lambda_permission" "scheduler_bounce_eventbridge" {
-  statement_id  = "AllowEventBridgeInvoke"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.scheduler_bounce.function_name
-  principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.scheduler_bounce.arn
+# SES bounce/complaint events: SNS ses_events → SQS ses_events → ses_events Lambda
+resource "aws_lambda_event_source_mapping" "ses_events" {
+  event_source_arn        = aws_sqs_queue.ses_events.arn
+  function_name           = aws_lambda_function.ses_events.arn
+  batch_size              = 10
+  function_response_types = ["ReportBatchItemFailures"]
 }
 
+# ── EventBridge → Lambda Permission ──────────────────────────────────────────
+# scheduler_bounce is removed — SES handles bounce detection via ses_events Lambda.
+# eventbridge.tf defines the rule and target; permission granted here.
+
 resource "aws_lambda_permission" "scheduler_drafts_eventbridge" {
-  statement_id  = "AllowEventBridgeInvoke"
+  statement_id  = "AllowEventBridgeInvokeSchedulerDrafts"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.scheduler_drafts.function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.scheduler_drafts.arn
 }
-

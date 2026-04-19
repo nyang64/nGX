@@ -96,8 +96,8 @@ resource "aws_cloudwatch_log_group" "lambda_embedder" {
   retention_in_days = local.log_retention_days
 }
 
-resource "aws_cloudwatch_log_group" "lambda_scheduler_bounce" {
-  name              = "/aws/lambda/${local.lambda_names.scheduler_bounce}"
+resource "aws_cloudwatch_log_group" "lambda_ses_events" {
+  name              = "/aws/lambda/${local.lambda_names.ses_events}"
   retention_in_days = local.log_retention_days
 }
 
@@ -194,7 +194,12 @@ resource "aws_lambda_function" "inboxes" {
   }
 
   environment {
-    variables = local.db_env
+    variables = merge(local.db_env, {
+      EMAIL_OUTBOUND_QUEUE_URL   = aws_sqs_queue.email_outbound.url
+      WEBHOOK_DELIVERY_QUEUE_URL = aws_sqs_queue.webhook_delivery.url
+      WS_DISPATCH_QUEUE_URL      = aws_sqs_queue.ws_dispatch.url
+      EMBEDDER_QUEUE_URL         = aws_sqs_queue.embedder.url
+    })
   }
 
   depends_on = [aws_cloudwatch_log_group.lambda_inboxes]
@@ -218,7 +223,11 @@ resource "aws_lambda_function" "threads" {
   }
 
   environment {
-    variables = local.db_env
+    variables = merge(local.db_env, {
+      WEBHOOK_DELIVERY_QUEUE_URL = aws_sqs_queue.webhook_delivery.url
+      WS_DISPATCH_QUEUE_URL      = aws_sqs_queue.ws_dispatch.url
+      EMBEDDER_QUEUE_URL         = aws_sqs_queue.embedder.url
+    })
   }
 
   depends_on = [aws_cloudwatch_log_group.lambda_threads]
@@ -266,7 +275,12 @@ resource "aws_lambda_function" "drafts" {
   }
 
   environment {
-    variables = local.db_env
+    variables = merge(local.db_env, {
+      EMAIL_OUTBOUND_QUEUE_URL   = aws_sqs_queue.email_outbound.url
+      WEBHOOK_DELIVERY_QUEUE_URL = aws_sqs_queue.webhook_delivery.url
+      WS_DISPATCH_QUEUE_URL      = aws_sqs_queue.ws_dispatch.url
+      EMBEDDER_QUEUE_URL         = aws_sqs_queue.embedder.url
+    })
   }
 
   depends_on = [aws_cloudwatch_log_group.lambda_drafts]
@@ -387,10 +401,13 @@ resource "aws_lambda_function" "email_inbound" {
 
   environment {
     variables = merge(local.db_env, {
-      S3_BUCKET_EMAILS       = aws_s3_bucket.emails.id
-      S3_BUCKET_ATTACHMENTS  = aws_s3_bucket.attachments.id
-      EVENTS_FANOUT_TOPIC_ARN = aws_sns_topic.events_fanout.arn
-      MAIL_DOMAIN            = var.mail_domain
+      S3_BUCKET_EMAILS           = aws_s3_bucket.emails.id
+      S3_BUCKET_ATTACHMENTS      = aws_s3_bucket.attachments.id
+      MAIL_DOMAIN                = var.mail_domain
+      # Domain events: published directly to SQS — no SNS broker
+      WEBHOOK_DELIVERY_QUEUE_URL = aws_sqs_queue.webhook_delivery.url
+      WS_DISPATCH_QUEUE_URL      = aws_sqs_queue.ws_dispatch.url
+      EMBEDDER_QUEUE_URL         = aws_sqs_queue.embedder.url
     })
   }
 
@@ -416,11 +433,13 @@ resource "aws_lambda_function" "email_outbound" {
 
   environment {
     variables = merge(local.db_env, {
-      S3_BUCKET_EMAILS        = aws_s3_bucket.emails.id
-      S3_BUCKET_ATTACHMENTS   = aws_s3_bucket.attachments.id
-      SMTP_RELAY_HOST         = var.smtp_relay_host
-      DKIM_SELECTOR           = var.dkim_selector
-      EVENTS_FANOUT_TOPIC_ARN = aws_sns_topic.events_fanout.arn
+      S3_BUCKET_EMAILS           = aws_s3_bucket.emails.id
+      S3_BUCKET_ATTACHMENTS      = aws_s3_bucket.attachments.id
+      SES_CONFIGURATION_SET      = aws_ses_configuration_set.main.name
+      # Domain events: published directly to SQS — no SNS broker
+      WEBHOOK_DELIVERY_QUEUE_URL = aws_sqs_queue.webhook_delivery.url
+      WS_DISPATCH_QUEUE_URL      = aws_sqs_queue.ws_dispatch.url
+      EMBEDDER_QUEUE_URL         = aws_sqs_queue.embedder.url
     })
   }
 
@@ -447,7 +466,6 @@ resource "aws_lambda_function" "event_dispatcher_webhook" {
   environment {
     variables = merge(local.db_env, {
       WEBHOOK_DELIVERY_QUEUE_URL = aws_sqs_queue.webhook_delivery.url
-      EVENTS_FANOUT_TOPIC_ARN    = aws_sns_topic.events_fanout.arn
     })
   }
 
@@ -502,26 +520,29 @@ resource "aws_lambda_function" "embedder" {
 
   environment {
     variables = merge(local.db_env, {
-      EMBEDDER_URL            = var.embedder_url
-      EMBEDDER_MODEL          = var.embedder_model
-      S3_BUCKET_EMAILS        = aws_s3_bucket.emails.id
-      EVENTS_FANOUT_TOPIC_ARN = aws_sns_topic.events_fanout.arn
+      EMBEDDER_URL          = var.embedder_url
+      EMBEDDER_MODEL        = var.embedder_model
+      S3_BUCKET_EMAILS      = aws_s3_bucket.emails.id
     })
   }
 
   depends_on = [aws_cloudwatch_log_group.lambda_embedder]
 }
 
-# ── scheduler_bounce ──────────────────────────────────────────────────────────
+# ── ses_events ────────────────────────────────────────────────────────────────
+# Processes SES bounce/complaint/delivery notifications from the ses_events SQS
+# queue. Updates messages.status in Aurora and publishes message.bounced domain
+# events directly to webhook-delivery and ws-dispatch SQS queues.
+# Replaces the old scheduler_bounce polling job — SES pushes in real time.
 
-resource "aws_lambda_function" "scheduler_bounce" {
-  function_name    = local.lambda_names.scheduler_bounce
+resource "aws_lambda_function" "ses_events" {
+  function_name    = local.lambda_names.ses_events
   role             = aws_iam_role.lambda.arn
   runtime          = "python3.12"
   handler          = "handler.handler"
   filename         = data.archive_file.lambda_stub.output_path
   source_code_hash = data.archive_file.lambda_stub.output_base64sha256
-  timeout          = 300
+  timeout          = 60
   memory_size      = 256
 
   vpc_config {
@@ -530,10 +551,13 @@ resource "aws_lambda_function" "scheduler_bounce" {
   }
 
   environment {
-    variables = local.db_env
+    variables = merge(local.db_env, {
+      WEBHOOK_DELIVERY_QUEUE_URL = aws_sqs_queue.webhook_delivery.url
+      WS_DISPATCH_QUEUE_URL      = aws_sqs_queue.ws_dispatch.url
+    })
   }
 
-  depends_on = [aws_cloudwatch_log_group.lambda_scheduler_bounce]
+  depends_on = [aws_cloudwatch_log_group.lambda_ses_events]
 }
 
 # ── scheduler_drafts ──────────────────────────────────────────────────────────

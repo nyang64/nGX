@@ -62,9 +62,9 @@ output "sqs_webhook_delivery_url" {
   value       = aws_sqs_queue.webhook_delivery.url
 }
 
-output "sns_events_fanout_arn" {
-  description = "SNS topic ARN for domain event fan-out (publish all events here)"
-  value       = aws_sns_topic.events_fanout.arn
+output "ses_events_queue_url" {
+  description = "SQS queue URL for SES bounce/complaint events"
+  value       = aws_sqs_queue.ses_events.url
 }
 
 # ── Networking ─────────────────────────────────────────────────────────────────

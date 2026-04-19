@@ -30,7 +30,7 @@ locals {
     event_dispatcher_webhook = "${local.prefix}-event-dispatcher-webhook"
     event_dispatcher_ws      = "${local.prefix}-event-dispatcher-ws"
     embedder                 = "${local.prefix}-embedder"
-    scheduler_bounce         = "${local.prefix}-scheduler-bounce"
+    ses_events               = "${local.prefix}-ses-events"
     scheduler_drafts         = "${local.prefix}-scheduler-drafts"
   }
 
@@ -42,6 +42,8 @@ locals {
     webhook_delivery = "${local.prefix}-webhook-delivery"
     webhook_dlq      = "${local.prefix}-webhook-delivery-dlq"
     ws_dispatch      = "${local.prefix}-ws-dispatch"
+    embedder         = "${local.prefix}-embedder"
+    ses_events       = "${local.prefix}-ses-events"
   }
 
   # ── S3 bucket names ──────────────────────────────────────────────────────────

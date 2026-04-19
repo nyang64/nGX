@@ -57,18 +57,6 @@ variable "mail_domain" {
   type        = string
 }
 
-variable "dkim_selector" {
-  description = "DKIM DNS selector subdomain"
-  type        = string
-  default     = "mail"
-}
-
-variable "smtp_relay_host" {
-  description = "SMTP relay host for outbound email. Empty = direct MX lookup"
-  type        = string
-  default     = ""
-}
-
 # ── Webhooks ───────────────────────────────────────────────────────────────────
 
 variable "webhook_max_retries" {

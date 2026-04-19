@@ -50,15 +50,19 @@ resource "aws_iam_role_policy" "lambda_app" {
           aws_sqs_queue.webhook_dlq.arn,
           aws_sqs_queue.ws_dispatch.arn,
           aws_sqs_queue.embedder.arn,
+          aws_sqs_queue.embedder_dlq.arn,
+          aws_sqs_queue.ses_events.arn,
         ]
       },
       {
-        Sid    = "SNSPublish"
+        # SES: send email on behalf of the verified domain
+        Sid    = "SESSend"
         Effect = "Allow"
         Action = [
-          "sns:Publish",
+          "ses:SendRawEmail",
+          "ses:SendEmail",
         ]
-        Resource = aws_sns_topic.events_fanout.arn
+        Resource = "*"
       },
       {
         Sid    = "S3EmailsAttachments"
