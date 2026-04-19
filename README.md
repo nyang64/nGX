@@ -154,20 +154,7 @@ Or use the Makefile hot-reload target for the API:
 make dev-api
 ```
 
-### 4. Stop services
-
-```bash
-# Stop all background Go services
-pkill -f 'go run ./services'
-
-# Stop all infrastructure containers
-make down
-
-# Stop containers and remove all volumes (destructive — wipes all data)
-make down-volumes
-```
-
-### 5. Create an org and API key
+### 4. Create an org and API key
 
 ```bash
 # Create organization
@@ -195,7 +182,7 @@ curl -X POST http://localhost:8080/v1/inboxes \
 # → inbox.email will be "agent@yourdomain.com"
 ```
 
-### 6. Send and receive email
+### 5. Send and receive email
 
 ```bash
 # Send outbound
@@ -206,6 +193,19 @@ curl -X POST http://localhost:8080/v1/inboxes/<inbox-id>/messages/send \
 # List threads
 curl http://localhost:8080/v1/inboxes/<inbox-id>/threads \
   -H "Authorization: Bearer $KEY"
+```
+
+### 6. Stop services
+
+```bash
+# Stop all background Go services
+pkill -f 'go run ./services'
+
+# Stop all infrastructure containers
+make down
+
+# Stop containers and remove all volumes (destructive — wipes all data)
+make down-volumes
 ```
 
 ## Production Deployment
