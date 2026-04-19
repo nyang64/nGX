@@ -84,6 +84,8 @@ resource "aws_apigatewayv2_stage" "websocket" {
   name        = var.environment
   auto_deploy = true
 
+  depends_on = [aws_api_gateway_account.main]
+
   default_route_settings {
     logging_level          = "INFO"
     data_trace_enabled     = false

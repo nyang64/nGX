@@ -6,7 +6,7 @@
 
 resource "aws_security_group" "lambda" {
   name        = "${local.prefix}-lambda"
-  description = "Attached to all Lambda functions — egress-only, no inbound TCP"
+  description = "Attached to all Lambda functions - egress-only, no inbound TCP"
   vpc_id      = aws_vpc.main.id
 
   egress {
@@ -24,7 +24,7 @@ resource "aws_security_group" "lambda" {
 
 resource "aws_security_group" "rds_proxy" {
   name        = "${local.prefix}-rds-proxy"
-  description = "RDS Proxy — accepts Postgres from Lambda SG, egress to Aurora"
+  description = "RDS Proxy - accepts Postgres from Lambda SG, egress to Aurora"
   vpc_id      = aws_vpc.main.id
 
   ingress {
@@ -50,7 +50,7 @@ resource "aws_security_group" "rds_proxy" {
 
 resource "aws_security_group" "aurora" {
   name        = "${local.prefix}-aurora"
-  description = "Aurora cluster — accepts Postgres from RDS Proxy SG only"
+  description = "Aurora cluster - accepts Postgres from RDS Proxy SG only"
   vpc_id      = aws_vpc.main.id
 
   ingress {
