@@ -182,7 +182,7 @@ On first run, use the bootstrap tool to create your initial org and admin API ke
 make bootstrap org="My Org" slug="my-org"
 
 # Save the printed API key — it is shown only once
-export KEY=am_live_xxxx
+export API_KEY=am_live_xxxx
 ```
 
 Then create a pod and inbox via the API:
@@ -190,13 +190,13 @@ Then create a pod and inbox via the API:
 ```bash
 # Create a pod
 curl -X POST http://${SMTP_HOSTNAME}:8080/v1/pods \
-  -H "Authorization: Bearer $KEY" \
+  -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"name":"My Product","slug":"my-product"}'
 
 # Provision an inbox — with MAIL_DOMAIN set, just supply the username
 curl -X POST http://${SMTP_HOSTNAME}:8080/v1/inboxes \
-  -H "Authorization: Bearer $KEY" \
+  -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"pod_id":"<pod-id>","address":"agent"}'
 # → inbox.email will be "agent@yourdomain.com"
@@ -207,12 +207,13 @@ curl -X POST http://${SMTP_HOSTNAME}:8080/v1/inboxes \
 ```bash
 # Send outbound
 curl -X POST http://${SMTP_HOSTNAME}:8080/v1/inboxes/<inbox-id>/messages/send \
-  -H "Authorization: Bearer $KEY" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -H "Content-Type: application/json" \
   -d '{"to":[{"email":"test@example.com"}],"subject":"Hello","body_text":"Hi there"}'
 
 # List threads
 curl http://${SMTP_HOSTNAME}:8080/v1/inboxes/<inbox-id>/threads \
-  -H "Authorization: Bearer $KEY"
+  -H "Authorization: Bearer ${API_KEY}"
 ```
 
 ### 6. Stop services
