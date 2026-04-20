@@ -17,7 +17,6 @@ import (
 	"agentmail/pkg/auth"
 	dbpkg "agentmail/pkg/db"
 	"agentmail/pkg/events"
-	"agentmail/pkg/kafka"
 	"agentmail/pkg/models"
 	"agentmail/services/inbox/store"
 
@@ -61,8 +60,8 @@ type DraftService struct {
 	messageStore     store.MessageStore
 	threadStore      store.ThreadStore
 	inboxStore       store.InboxStore
-	eventProducer    *kafka.Producer
-	outboundProducer *kafka.Producer
+	eventProducer    events.EventPublisher
+	outboundProducer events.OutboundPublisher
 }
 
 // NewDraftService creates a new DraftService.
@@ -72,8 +71,8 @@ func NewDraftService(
 	messageStore store.MessageStore,
 	threadStore store.ThreadStore,
 	inboxStore store.InboxStore,
-	eventProducer *kafka.Producer,
-	outboundProducer *kafka.Producer,
+	eventProducer events.EventPublisher,
+	outboundProducer events.OutboundPublisher,
 ) *DraftService {
 	return &DraftService{
 		pool:             pool,

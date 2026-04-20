@@ -15,7 +15,7 @@ import (
 
 	"agentmail/pkg/auth"
 	dbpkg "agentmail/pkg/db"
-	"agentmail/pkg/kafka"
+	"agentmail/pkg/events"
 	"agentmail/pkg/models"
 	"agentmail/services/inbox/store"
 
@@ -65,7 +65,7 @@ type MessageService struct {
 	messageStore     store.MessageStore
 	threadStore      store.ThreadStore
 	inboxStore       store.InboxStore
-	outboundProducer *kafka.Producer
+	outboundProducer events.OutboundPublisher
 }
 
 // NewMessageService creates a new MessageService.
@@ -74,7 +74,7 @@ func NewMessageService(
 	messageStore store.MessageStore,
 	threadStore store.ThreadStore,
 	inboxStore store.InboxStore,
-	outboundProducer *kafka.Producer,
+	outboundProducer events.OutboundPublisher,
 ) *MessageService {
 	return &MessageService{
 		pool:             pool,

@@ -19,7 +19,7 @@ import (
 	"github.com/emersion/go-smtp"
 	"github.com/google/uuid"
 
-	"agentmail/pkg/kafka"
+	"agentmail/pkg/events"
 	"agentmail/pkg/s3"
 	"agentmail/services/email-pipeline/emailauth"
 )
@@ -42,11 +42,11 @@ type RawEmailJob struct {
 // email.inbound.raw so the SMTP session can send 250 OK immediately.
 type Enqueuer struct {
 	s3Client *s3.Client
-	producer *kafka.Producer
+	producer events.OutboundPublisher
 }
 
-// NewEnqueuer creates an Enqueuer wired to S3 and the inbound Kafka producer.
-func NewEnqueuer(s3Client *s3.Client, producer *kafka.Producer) *Enqueuer {
+// NewEnqueuer creates an Enqueuer wired to S3 and the inbound producer.
+func NewEnqueuer(s3Client *s3.Client, producer events.OutboundPublisher) *Enqueuer {
 	return &Enqueuer{s3Client: s3Client, producer: producer}
 }
 

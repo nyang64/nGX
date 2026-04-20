@@ -38,7 +38,7 @@ type InboundConsumer struct {
 	pool       *pgxpool.Pool
 	emailStore *store.EmailStore
 	s3Client   *s3.Client
-	producer   *kafka.Producer
+	producer   events.EventPublisher
 }
 
 // NewInboundConsumer wires an InboundConsumer ready to consume from email.inbound.raw.
@@ -48,7 +48,7 @@ func NewInboundConsumer(
 	pool *pgxpool.Pool,
 	emailStore *store.EmailStore,
 	s3Client *s3.Client,
-	producer *kafka.Producer,
+	producer events.EventPublisher,
 ) *InboundConsumer {
 	return &InboundConsumer{
 		consumer:   kafka.NewConsumer(brokers, kafka.TopicEmailInboundRaw, groupID),

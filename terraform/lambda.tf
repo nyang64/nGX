@@ -107,19 +107,23 @@ resource "aws_cloudwatch_log_group" "lambda_scheduler_drafts" {
 }
 
 # ── authorizer ────────────────────────────────────────────────────────────────
-# Validates API keys — needs DB but skips VPC for lower cold-start latency.
-# Run without VPC; uses public RDS Proxy endpoint via internet.
-# NOTE: If your RDS Proxy is private-only, move this into VPC config.
+# Validates API keys — needs DB. Placed in VPC to reach private RDS Proxy.
 
 resource "aws_lambda_function" "authorizer" {
   function_name    = local.lambda_names.authorizer
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda_stub.output_path
-  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/authorizer.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/authorizer.zip")
   timeout          = 30
   memory_size      = 256
+
+  vpc_config {
+    subnet_ids         = local.lambda_subnet_ids
+    security_group_ids = [aws_security_group.lambda.id]
+  }
 
   environment {
     variables = local.db_env
@@ -133,10 +137,11 @@ resource "aws_lambda_function" "authorizer" {
 resource "aws_lambda_function" "orgs" {
   function_name    = local.lambda_names.orgs
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda_stub.output_path
-  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/orgs.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/orgs.zip")
   timeout          = 30
   memory_size      = 256
 
@@ -157,10 +162,11 @@ resource "aws_lambda_function" "orgs" {
 resource "aws_lambda_function" "auth" {
   function_name    = local.lambda_names.auth
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda_stub.output_path
-  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/auth.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/auth.zip")
   timeout          = 30
   memory_size      = 256
 
@@ -181,10 +187,11 @@ resource "aws_lambda_function" "auth" {
 resource "aws_lambda_function" "inboxes" {
   function_name    = local.lambda_names.inboxes
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda_stub.output_path
-  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/inboxes.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/inboxes.zip")
   timeout          = 30
   memory_size      = 256
 
@@ -195,6 +202,7 @@ resource "aws_lambda_function" "inboxes" {
 
   environment {
     variables = merge(local.db_env, {
+      MAIL_DOMAIN                = var.mail_domain
       EMAIL_OUTBOUND_QUEUE_URL   = aws_sqs_queue.email_outbound.url
       WEBHOOK_DELIVERY_QUEUE_URL = aws_sqs_queue.webhook_delivery.url
       WS_DISPATCH_QUEUE_URL      = aws_sqs_queue.ws_dispatch.url
@@ -210,10 +218,11 @@ resource "aws_lambda_function" "inboxes" {
 resource "aws_lambda_function" "threads" {
   function_name    = local.lambda_names.threads
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda_stub.output_path
-  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/threads.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/threads.zip")
   timeout          = 30
   memory_size      = 256
 
@@ -238,10 +247,11 @@ resource "aws_lambda_function" "threads" {
 resource "aws_lambda_function" "messages" {
   function_name    = local.lambda_names.messages
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda_stub.output_path
-  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/messages.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/messages.zip")
   timeout          = 30
   memory_size      = 256
 
@@ -262,10 +272,11 @@ resource "aws_lambda_function" "messages" {
 resource "aws_lambda_function" "drafts" {
   function_name    = local.lambda_names.drafts
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda_stub.output_path
-  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/drafts.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/drafts.zip")
   timeout          = 30
   memory_size      = 256
 
@@ -291,10 +302,11 @@ resource "aws_lambda_function" "drafts" {
 resource "aws_lambda_function" "webhooks" {
   function_name    = local.lambda_names.webhooks
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda_stub.output_path
-  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/webhooks.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/webhooks.zip")
   timeout          = 30
   memory_size      = 256
 
@@ -319,10 +331,11 @@ resource "aws_lambda_function" "webhooks" {
 resource "aws_lambda_function" "search" {
   function_name    = local.lambda_names.search
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda_stub.output_path
-  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/search.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/search.zip")
   timeout          = 30
   memory_size      = 256
 
@@ -342,19 +355,22 @@ resource "aws_lambda_function" "search" {
 }
 
 # ── ws_connect ────────────────────────────────────────────────────────────────
-# Inserts connectionId into websocket_connections table — needs DB, skips VPC
-# for same reason as authorizer (fast WebSocket handshake path).
-# NOTE: Move into VPC if RDS Proxy is private-only.
 
 resource "aws_lambda_function" "ws_connect" {
   function_name    = local.lambda_names.ws_connect
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda_stub.output_path
-  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/ws_connect.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/ws_connect.zip")
   timeout          = 30
   memory_size      = 256
+
+  vpc_config {
+    subnet_ids         = local.lambda_subnet_ids
+    security_group_ids = [aws_security_group.lambda.id]
+  }
 
   environment {
     variables = local.db_env
@@ -368,12 +384,18 @@ resource "aws_lambda_function" "ws_connect" {
 resource "aws_lambda_function" "ws_disconnect" {
   function_name    = local.lambda_names.ws_disconnect
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda_stub.output_path
-  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/ws_disconnect.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/ws_disconnect.zip")
   timeout          = 30
   memory_size      = 256
+
+  vpc_config {
+    subnet_ids         = local.lambda_subnet_ids
+    security_group_ids = [aws_security_group.lambda.id]
+  }
 
   environment {
     variables = local.db_env
@@ -387,10 +409,11 @@ resource "aws_lambda_function" "ws_disconnect" {
 resource "aws_lambda_function" "email_inbound" {
   function_name    = local.lambda_names.email_inbound
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda_stub.output_path
-  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/email_inbound.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/email_inbound.zip")
   timeout          = 300
   memory_size      = 512
 
@@ -419,10 +442,11 @@ resource "aws_lambda_function" "email_inbound" {
 resource "aws_lambda_function" "email_outbound" {
   function_name    = local.lambda_names.email_outbound
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda_stub.output_path
-  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/email_outbound.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/email_outbound.zip")
   timeout          = 300
   memory_size      = 512
 
@@ -451,10 +475,11 @@ resource "aws_lambda_function" "email_outbound" {
 resource "aws_lambda_function" "event_dispatcher_webhook" {
   function_name    = local.lambda_names.event_dispatcher_webhook
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda_stub.output_path
-  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/event_dispatcher_webhook.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/event_dispatcher_webhook.zip")
   timeout          = 30
   memory_size      = 256
 
@@ -477,10 +502,11 @@ resource "aws_lambda_function" "event_dispatcher_webhook" {
 resource "aws_lambda_function" "event_dispatcher_ws" {
   function_name    = local.lambda_names.event_dispatcher_ws
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda_stub.output_path
-  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/event_dispatcher_ws.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/event_dispatcher_ws.zip")
   timeout          = 30
   memory_size      = 256
 
@@ -506,10 +532,11 @@ resource "aws_lambda_function" "event_dispatcher_ws" {
 resource "aws_lambda_function" "embedder" {
   function_name    = local.lambda_names.embedder
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda_stub.output_path
-  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/embedder.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/embedder.zip")
   timeout          = 30
   memory_size      = 256
 
@@ -538,10 +565,11 @@ resource "aws_lambda_function" "embedder" {
 resource "aws_lambda_function" "ses_events" {
   function_name    = local.lambda_names.ses_events
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda_stub.output_path
-  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/ses_events.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/ses_events.zip")
   timeout          = 60
   memory_size      = 256
 
@@ -565,10 +593,11 @@ resource "aws_lambda_function" "ses_events" {
 resource "aws_lambda_function" "scheduler_drafts" {
   function_name    = local.lambda_names.scheduler_drafts
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda_stub.output_path
-  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/scheduler_drafts.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/scheduler_drafts.zip")
   timeout          = 300
   memory_size      = 256
 
@@ -594,10 +623,11 @@ resource "aws_cloudwatch_log_group" "lambda_domains" {
 resource "aws_lambda_function" "domains" {
   function_name    = local.lambda_names.domains
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda_stub.output_path
-  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/domains.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/domains.zip")
   timeout          = 30
   memory_size      = 256
 

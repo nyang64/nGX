@@ -12,6 +12,14 @@ SERVICES := api auth inbox email-pipeline event-dispatcher webhook-service sched
 BIN_DIR   := bin
 DIST_DIR  := dist
 
+# Lambda build configuration
+LAMBDA_NAMES := authorizer orgs auth inboxes threads messages drafts webhooks search domains \
+                ws_connect ws_disconnect email_inbound email_outbound \
+                event_dispatcher_webhook event_dispatcher_ws embedder ses_events scheduler_drafts
+
+S3_ARTIFACTS_BUCKET ?= $(shell cd terraform && terraform output -raw s3_bucket_artifacts 2>/dev/null || echo "ngx-prod-artifacts")
+AWS_REGION ?= us-east-1
+
 # Docker compose
 DC        := docker compose
 
@@ -133,6 +141,37 @@ build-search: ## Build the search service binary
 	go build $(LDFLAGS) -o $(BIN_DIR)/search ./services/search/cmd/search
 
 # ============================================================
+# Lambda Build & Deploy
+# ============================================================
+
+.PHONY: build-lambda-%
+build-lambda-%: ## Build a single Lambda function (arm64 Linux): make build-lambda-authorizer
+	@echo "Building Lambda: $*"
+	@mkdir -p dist/lambdas/$*
+	cd lambdas/$* && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags lambda.norpc -o ../../dist/lambdas/$*/bootstrap .
+	cd dist/lambdas/$* && zip -j ../../../dist/lambdas/$*.zip bootstrap
+
+.PHONY: build-lambdas
+build-lambdas: $(addprefix build-lambda-,$(LAMBDA_NAMES)) ## Build all Lambda functions
+	@echo "All Lambdas built successfully"
+
+.PHONY: deploy-lambda-%
+deploy-lambda-%: build-lambda-% ## Build and deploy a single Lambda to AWS: make deploy-lambda-authorizer
+	@echo "Deploying Lambda: $*"
+	@FNAME=$$(echo "ngx-prod-$*" | tr '_' '-'); \
+	aws s3 cp dist/lambdas/$*.zip s3://$(S3_ARTIFACTS_BUCKET)/lambdas/$*.zip --region $(AWS_REGION); \
+	aws lambda update-function-code \
+		--function-name $$FNAME \
+		--s3-bucket $(S3_ARTIFACTS_BUCKET) \
+		--s3-key lambdas/$*.zip \
+		--region $(AWS_REGION) \
+		--architectures arm64
+
+.PHONY: deploy-lambdas
+deploy-lambdas: $(addprefix deploy-lambda-,$(LAMBDA_NAMES)) ## Build and deploy all Lambda functions to AWS
+	@echo "All Lambdas deployed successfully"
+
+# ============================================================
 # Tests
 # ============================================================
 
@@ -225,7 +264,7 @@ generate: ## Run go generate across all packages
 .PHONY: tidy
 tidy: ## Sync go.work and tidy all modules
 	go work sync
-	@for mod in pkg services/api services/auth services/inbox services/email-pipeline \
+	@for mod in pkg lambdas services/api services/auth services/inbox services/email-pipeline \
 		services/event-dispatcher services/webhook-service services/scheduler services/search \
 		services/embedder tools/migrate; do \
 		echo "Tidying $$mod..."; \
