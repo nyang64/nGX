@@ -26,6 +26,7 @@ CREATE INDEX websocket_connections_org_id_idx
     ON websocket_connections (org_id);
 
 -- Quickly prune stale connections (any periodic cleanup job)
+-- No partial index predicate — NOW() is not IMMUTABLE in PostgreSQL.
+-- Cleanup queries filter by ttl at runtime: WHERE ttl < NOW()
 CREATE INDEX websocket_connections_ttl_idx
-    ON websocket_connections (ttl)
-    WHERE ttl < NOW();
+    ON websocket_connections (ttl);
