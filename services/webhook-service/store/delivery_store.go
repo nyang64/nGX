@@ -236,6 +236,7 @@ func (s *DeliveryStore) ListDeliveries(ctx context.Context, webhookID, orgID uui
 	var deliveries []*models.WebhookDelivery
 	for rows.Next() {
 		var d models.WebhookDelivery
+		var responseBody, errorMessage *string
 		err := rows.Scan(
 			&d.ID,
 			&d.WebhookID,
@@ -247,13 +248,19 @@ func (s *DeliveryStore) ListDeliveries(ctx context.Context, webhookID, orgID uui
 			&d.NextAttemptAt,
 			&d.LastAttemptAt,
 			&d.ResponseStatus,
-			&d.ResponseBody,
-			&d.ErrorMessage,
+			&responseBody,
+			&errorMessage,
 			&d.CreatedAt,
 			&d.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan delivery: %w", err)
+		}
+		if responseBody != nil {
+			d.ResponseBody = *responseBody
+		}
+		if errorMessage != nil {
+			d.ErrorMessage = *errorMessage
 		}
 		deliveries = append(deliveries, &d)
 	}
@@ -392,6 +399,7 @@ func (s *DeliveryStore) GetPendingRetries(ctx context.Context) ([]*models.Webhoo
 	var deliveries []*models.WebhookDelivery
 	for rows.Next() {
 		var d models.WebhookDelivery
+		var responseBody, errorMessage *string
 		err := rows.Scan(
 			&d.ID,
 			&d.WebhookID,
@@ -403,13 +411,19 @@ func (s *DeliveryStore) GetPendingRetries(ctx context.Context) ([]*models.Webhoo
 			&d.NextAttemptAt,
 			&d.LastAttemptAt,
 			&d.ResponseStatus,
-			&d.ResponseBody,
-			&d.ErrorMessage,
+			&responseBody,
+			&errorMessage,
 			&d.CreatedAt,
 			&d.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan delivery: %w", err)
+		}
+		if responseBody != nil {
+			d.ResponseBody = *responseBody
+		}
+		if errorMessage != nil {
+			d.ErrorMessage = *errorMessage
 		}
 		deliveries = append(deliveries, &d)
 	}
