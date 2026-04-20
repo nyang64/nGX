@@ -55,12 +55,28 @@ resource "aws_iam_role_policy" "lambda_app" {
         ]
       },
       {
-        # SES: send email on behalf of the verified domain
+        # SES: send email on behalf of verified domains
         Sid    = "SESSend"
         Effect = "Allow"
         Action = [
           "ses:SendRawEmail",
           "ses:SendEmail",
+        ]
+        Resource = "*"
+      },
+      {
+        # SES: manage custom domain identities and receipt rules (domains Lambda)
+        Sid    = "SESDomainManagement"
+        Effect = "Allow"
+        Action = [
+          "ses:VerifyDomainIdentity",
+          "ses:VerifyDomainDkim",
+          "ses:DeleteIdentity",
+          "ses:GetIdentityVerificationAttributes",
+          "ses:GetIdentityDkimAttributes",
+          "ses:CreateReceiptRule",
+          "ses:DeleteReceiptRule",
+          "ses:DescribeReceiptRule",
         ]
         Resource = "*"
       },

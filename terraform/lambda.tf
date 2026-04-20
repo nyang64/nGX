@@ -583,3 +583,35 @@ resource "aws_lambda_function" "scheduler_drafts" {
 
   depends_on = [aws_cloudwatch_log_group.lambda_scheduler_drafts]
 }
+
+# ── domains ───────────────────────────────────────────────────────────────────
+
+resource "aws_cloudwatch_log_group" "lambda_domains" {
+  name              = "/aws/lambda/${local.lambda_names.domains}"
+  retention_in_days = local.log_retention_days
+}
+
+resource "aws_lambda_function" "domains" {
+  function_name    = local.lambda_names.domains
+  role             = aws_iam_role.lambda.arn
+  runtime          = "python3.12"
+  handler          = "handler.handler"
+  filename         = data.archive_file.lambda_stub.output_path
+  source_code_hash = data.archive_file.lambda_stub.output_base64sha256
+  timeout          = 30
+  memory_size      = 256
+
+  vpc_config {
+    subnet_ids         = local.lambda_subnet_ids
+    security_group_ids = [aws_security_group.lambda.id]
+  }
+
+  environment {
+    variables = merge(local.db_env, {
+      SES_RULE_SET_NAME = aws_ses_receipt_rule_set.main.rule_set_name
+      S3_EMAILS_BUCKET  = aws_s3_bucket.emails.id
+    })
+  }
+
+  depends_on = [aws_cloudwatch_log_group.lambda_domains]
+}

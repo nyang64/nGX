@@ -10,6 +10,7 @@ locals {
     drafts   = "arn:aws:apigateway:${var.aws_region}:lambda:path/2015-03-31/functions/${aws_lambda_function.drafts.arn}/invocations"
     webhooks = "arn:aws:apigateway:${var.aws_region}:lambda:path/2015-03-31/functions/${aws_lambda_function.webhooks.arn}/invocations"
     search   = "arn:aws:apigateway:${var.aws_region}:lambda:path/2015-03-31/functions/${aws_lambda_function.search.arn}/invocations"
+    domains  = "arn:aws:apigateway:${var.aws_region}:lambda:path/2015-03-31/functions/${aws_lambda_function.domains.arn}/invocations"
   }
 
   cors_response_parameters = {
@@ -1882,6 +1883,244 @@ resource "aws_lambda_permission" "search_api" {
   statement_id  = "AllowAPIGatewayInvokeSearch"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.search.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_api_gateway_rest_api.main.execution_arn}/*"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# /v1/domains  — custom domain management (enterprise BYOD)
+# ─────────────────────────────────────────────────────────────────────────────
+
+resource "aws_api_gateway_resource" "v1_domains" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  parent_id   = aws_api_gateway_resource.v1.id
+  path_part   = "domains"
+}
+
+resource "aws_api_gateway_resource" "v1_domains_domain_id" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  parent_id   = aws_api_gateway_resource.v1_domains.id
+  path_part   = "{domain_id}"
+}
+
+resource "aws_api_gateway_resource" "v1_domains_domain_id_verify" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  parent_id   = aws_api_gateway_resource.v1_domains_domain_id.id
+  path_part   = "verify"
+}
+
+# POST /v1/domains
+resource "aws_api_gateway_method" "post_v1_domains" {
+  rest_api_id   = aws_api_gateway_rest_api.main.id
+  resource_id   = aws_api_gateway_resource.v1_domains.id
+  http_method   = "POST"
+  authorization = "CUSTOM"
+  authorizer_id = aws_api_gateway_authorizer.api_key.id
+}
+
+resource "aws_api_gateway_integration" "post_v1_domains" {
+  rest_api_id             = aws_api_gateway_rest_api.main.id
+  resource_id             = aws_api_gateway_resource.v1_domains.id
+  http_method             = aws_api_gateway_method.post_v1_domains.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = local.lambda_uri.domains
+}
+
+# GET /v1/domains
+resource "aws_api_gateway_method" "get_v1_domains" {
+  rest_api_id   = aws_api_gateway_rest_api.main.id
+  resource_id   = aws_api_gateway_resource.v1_domains.id
+  http_method   = "GET"
+  authorization = "CUSTOM"
+  authorizer_id = aws_api_gateway_authorizer.api_key.id
+}
+
+resource "aws_api_gateway_integration" "get_v1_domains" {
+  rest_api_id             = aws_api_gateway_rest_api.main.id
+  resource_id             = aws_api_gateway_resource.v1_domains.id
+  http_method             = aws_api_gateway_method.get_v1_domains.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = local.lambda_uri.domains
+}
+
+# OPTIONS /v1/domains  (CORS)
+resource "aws_api_gateway_method" "options_v1_domains" {
+  rest_api_id   = aws_api_gateway_rest_api.main.id
+  resource_id   = aws_api_gateway_resource.v1_domains.id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "options_v1_domains" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  resource_id = aws_api_gateway_resource.v1_domains.id
+  http_method = aws_api_gateway_method.options_v1_domains.http_method
+  type        = "MOCK"
+  request_templates = {
+    "application/json" = jsonencode({ statusCode = 200 })
+  }
+}
+
+resource "aws_api_gateway_method_response" "options_v1_domains" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  resource_id = aws_api_gateway_resource.v1_domains.id
+  http_method = aws_api_gateway_method.options_v1_domains.http_method
+  status_code = "200"
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Origin"  = true
+  }
+}
+
+resource "aws_api_gateway_integration_response" "options_v1_domains" {
+  rest_api_id         = aws_api_gateway_rest_api.main.id
+  resource_id         = aws_api_gateway_resource.v1_domains.id
+  http_method         = aws_api_gateway_method.options_v1_domains.http_method
+  status_code         = aws_api_gateway_method_response.options_v1_domains.status_code
+  response_parameters = local.cors_response_parameters
+}
+
+# GET /v1/domains/{domain_id}
+resource "aws_api_gateway_method" "get_v1_domains_domain_id" {
+  rest_api_id   = aws_api_gateway_rest_api.main.id
+  resource_id   = aws_api_gateway_resource.v1_domains_domain_id.id
+  http_method   = "GET"
+  authorization = "CUSTOM"
+  authorizer_id = aws_api_gateway_authorizer.api_key.id
+}
+
+resource "aws_api_gateway_integration" "get_v1_domains_domain_id" {
+  rest_api_id             = aws_api_gateway_rest_api.main.id
+  resource_id             = aws_api_gateway_resource.v1_domains_domain_id.id
+  http_method             = aws_api_gateway_method.get_v1_domains_domain_id.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = local.lambda_uri.domains
+  timeout_milliseconds    = 29000
+}
+
+# DELETE /v1/domains/{domain_id}
+resource "aws_api_gateway_method" "delete_v1_domains_domain_id" {
+  rest_api_id   = aws_api_gateway_rest_api.main.id
+  resource_id   = aws_api_gateway_resource.v1_domains_domain_id.id
+  http_method   = "DELETE"
+  authorization = "CUSTOM"
+  authorizer_id = aws_api_gateway_authorizer.api_key.id
+}
+
+resource "aws_api_gateway_integration" "delete_v1_domains_domain_id" {
+  rest_api_id             = aws_api_gateway_rest_api.main.id
+  resource_id             = aws_api_gateway_resource.v1_domains_domain_id.id
+  http_method             = aws_api_gateway_method.delete_v1_domains_domain_id.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = local.lambda_uri.domains
+  timeout_milliseconds    = 29000
+}
+
+# OPTIONS /v1/domains/{domain_id}  (CORS)
+resource "aws_api_gateway_method" "options_v1_domains_domain_id" {
+  rest_api_id   = aws_api_gateway_rest_api.main.id
+  resource_id   = aws_api_gateway_resource.v1_domains_domain_id.id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "options_v1_domains_domain_id" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  resource_id = aws_api_gateway_resource.v1_domains_domain_id.id
+  http_method = aws_api_gateway_method.options_v1_domains_domain_id.http_method
+  type        = "MOCK"
+  request_templates = {
+    "application/json" = jsonencode({ statusCode = 200 })
+  }
+}
+
+resource "aws_api_gateway_method_response" "options_v1_domains_domain_id" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  resource_id = aws_api_gateway_resource.v1_domains_domain_id.id
+  http_method = aws_api_gateway_method.options_v1_domains_domain_id.http_method
+  status_code = "200"
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Origin"  = true
+  }
+}
+
+resource "aws_api_gateway_integration_response" "options_v1_domains_domain_id" {
+  rest_api_id         = aws_api_gateway_rest_api.main.id
+  resource_id         = aws_api_gateway_resource.v1_domains_domain_id.id
+  http_method         = aws_api_gateway_method.options_v1_domains_domain_id.http_method
+  status_code         = aws_api_gateway_method_response.options_v1_domains_domain_id.status_code
+  response_parameters = local.cors_response_parameters
+}
+
+# POST /v1/domains/{domain_id}/verify
+resource "aws_api_gateway_method" "post_v1_domains_domain_id_verify" {
+  rest_api_id   = aws_api_gateway_rest_api.main.id
+  resource_id   = aws_api_gateway_resource.v1_domains_domain_id_verify.id
+  http_method   = "POST"
+  authorization = "CUSTOM"
+  authorizer_id = aws_api_gateway_authorizer.api_key.id
+}
+
+resource "aws_api_gateway_integration" "post_v1_domains_domain_id_verify" {
+  rest_api_id             = aws_api_gateway_rest_api.main.id
+  resource_id             = aws_api_gateway_resource.v1_domains_domain_id_verify.id
+  http_method             = aws_api_gateway_method.post_v1_domains_domain_id_verify.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = local.lambda_uri.domains
+  timeout_milliseconds    = 29000
+}
+
+# OPTIONS /v1/domains/{domain_id}/verify  (CORS)
+resource "aws_api_gateway_method" "options_v1_domains_domain_id_verify" {
+  rest_api_id   = aws_api_gateway_rest_api.main.id
+  resource_id   = aws_api_gateway_resource.v1_domains_domain_id_verify.id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "options_v1_domains_domain_id_verify" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  resource_id = aws_api_gateway_resource.v1_domains_domain_id_verify.id
+  http_method = aws_api_gateway_method.options_v1_domains_domain_id_verify.http_method
+  type        = "MOCK"
+  request_templates = {
+    "application/json" = jsonencode({ statusCode = 200 })
+  }
+}
+
+resource "aws_api_gateway_method_response" "options_v1_domains_domain_id_verify" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  resource_id = aws_api_gateway_resource.v1_domains_domain_id_verify.id
+  http_method = aws_api_gateway_method.options_v1_domains_domain_id_verify.http_method
+  status_code = "200"
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Origin"  = true
+  }
+}
+
+resource "aws_api_gateway_integration_response" "options_v1_domains_domain_id_verify" {
+  rest_api_id         = aws_api_gateway_rest_api.main.id
+  resource_id         = aws_api_gateway_resource.v1_domains_domain_id_verify.id
+  http_method         = aws_api_gateway_method.options_v1_domains_domain_id_verify.http_method
+  status_code         = aws_api_gateway_method_response.options_v1_domains_domain_id_verify.status_code
+  response_parameters = local.cors_response_parameters
+}
+
+# Lambda permission
+resource "aws_lambda_permission" "domains_api" {
+  statement_id  = "AllowAPIGatewayInvokeDomains"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.domains.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_api_gateway_rest_api.main.execution_arn}/*"
 }

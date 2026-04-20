@@ -32,6 +32,7 @@ locals {
     embedder                 = "${local.prefix}-embedder"
     ses_events               = "${local.prefix}-ses-events"
     scheduler_drafts         = "${local.prefix}-scheduler-drafts"
+    domains                  = "${local.prefix}-domains"
   }
 
   # ── SQS queue names ─────────────────────────────────────────────────────────

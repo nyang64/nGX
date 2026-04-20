@@ -334,6 +334,26 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_integration.get_v1_search.id,
       aws_api_gateway_method.options_v1_search.id,
       aws_api_gateway_integration.options_v1_search.id,
+      # /v1/domains
+      aws_api_gateway_resource.v1_domains.id,
+      aws_api_gateway_resource.v1_domains_domain_id.id,
+      aws_api_gateway_resource.v1_domains_domain_id_verify.id,
+      aws_api_gateway_method.post_v1_domains.id,
+      aws_api_gateway_integration.post_v1_domains.id,
+      aws_api_gateway_method.get_v1_domains.id,
+      aws_api_gateway_integration.get_v1_domains.id,
+      aws_api_gateway_method.options_v1_domains.id,
+      aws_api_gateway_integration.options_v1_domains.id,
+      aws_api_gateway_method.get_v1_domains_domain_id.id,
+      aws_api_gateway_integration.get_v1_domains_domain_id.id,
+      aws_api_gateway_method.delete_v1_domains_domain_id.id,
+      aws_api_gateway_integration.delete_v1_domains_domain_id.id,
+      aws_api_gateway_method.options_v1_domains_domain_id.id,
+      aws_api_gateway_integration.options_v1_domains_domain_id.id,
+      aws_api_gateway_method.post_v1_domains_domain_id_verify.id,
+      aws_api_gateway_integration.post_v1_domains_domain_id_verify.id,
+      aws_api_gateway_method.options_v1_domains_domain_id_verify.id,
+      aws_api_gateway_integration.options_v1_domains_domain_id_verify.id,
     ]))
   }
 
