@@ -261,7 +261,12 @@ resource "aws_lambda_function" "messages" {
   }
 
   environment {
-    variables = local.db_env
+    variables = merge(local.db_env, {
+      EMAIL_OUTBOUND_QUEUE_URL   = aws_sqs_queue.email_outbound.url
+      WEBHOOK_DELIVERY_QUEUE_URL = aws_sqs_queue.webhook_delivery.url
+      WS_DISPATCH_QUEUE_URL      = aws_sqs_queue.ws_dispatch.url
+      EMBEDDER_QUEUE_URL         = aws_sqs_queue.embedder.url
+    })
   }
 
   depends_on = [aws_cloudwatch_log_group.lambda_messages]
@@ -517,10 +522,8 @@ resource "aws_lambda_function" "event_dispatcher_ws" {
 
   environment {
     variables = merge(local.db_env, {
-      # Cannot reference aws_apigatewayv2_api.websocket.api_endpoint here —
-      # that would create a dependency cycle through the Lambda permission.
-      # Set this value post-deploy via: aws lambda update-function-configuration
-      APIGW_WEBSOCKET_ENDPOINT = "CONFIGURE_POST_DEPLOY"
+      # Management API uses https://, not wss://
+      APIGW_WEBSOCKET_ENDPOINT = replace(aws_apigatewayv2_stage.websocket.invoke_url, "wss://", "https://")
     })
   }
 
@@ -607,7 +610,12 @@ resource "aws_lambda_function" "scheduler_drafts" {
   }
 
   environment {
-    variables = local.db_env
+    variables = merge(local.db_env, {
+      EMAIL_OUTBOUND_QUEUE_URL   = aws_sqs_queue.email_outbound.url
+      WEBHOOK_DELIVERY_QUEUE_URL = aws_sqs_queue.webhook_delivery.url
+      WS_DISPATCH_QUEUE_URL      = aws_sqs_queue.ws_dispatch.url
+      EMBEDDER_QUEUE_URL         = aws_sqs_queue.embedder.url
+    })
   }
 
   depends_on = [aws_cloudwatch_log_group.lambda_scheduler_drafts]

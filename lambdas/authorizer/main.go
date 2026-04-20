@@ -41,8 +41,24 @@ func init() {
 	}
 }
 
-func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest) (events.APIGatewayCustomAuthorizerResponse, error) {
+// authorizerEvent merges TOKEN and REQUEST authorizer payloads so one handler
+// covers both the REST API (Authorization header / TOKEN mode) and the
+// WebSocket API ($connect REQUEST mode with ?token= query parameter).
+type authorizerEvent struct {
+	// TOKEN authorizer: API GW injects the raw Authorization header value here.
+	AuthorizationToken string `json:"authorizationToken"`
+	// Both modes supply methodArn.
+	MethodArn string `json:"methodArn"`
+	// REQUEST authorizer: query string parameters forwarded as-is.
+	QueryStringParameters map[string]string `json:"queryStringParameters"`
+}
+
+func handler(ctx context.Context, event authorizerEvent) (events.APIGatewayCustomAuthorizerResponse, error) {
+	// Support both REST (Authorization header) and WebSocket (?token= query param).
 	token := event.AuthorizationToken
+	if token == "" {
+		token = event.QueryStringParameters["token"]
+	}
 	// Strip "Bearer " prefix if present.
 	if strings.HasPrefix(token, "Bearer ") {
 		token = strings.TrimPrefix(token, "Bearer ")
@@ -51,16 +67,18 @@ func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest
 		return deny("anonymous", event.MethodArn), nil
 	}
 
+	slog.Info("authorizer: validating", "method_arn", event.MethodArn, "has_token", token != "")
 	claims, err := validateKey(ctx, token)
 	if err != nil {
-		slog.Warn("authorizer: invalid key", "error", err)
+		slog.Warn("authorizer: invalid key", "error", err, "method_arn", event.MethodArn)
 		return deny("anonymous", event.MethodArn), nil
 	}
 
-	// Allow invocation of all methods in this API (wildcard resource ARN).
-	// The methodArn is: arn:aws:execute-api:region:account:api-id/stage/METHOD/resource
-	// We allow: arn:aws:execute-api:region:account:api-id/stage/*/*
-	resource := wildcardArn(event.MethodArn)
+	// Allow invocation of all methods in this API (wildcard resource ARNs).
+	// REST:      arn:aws:execute-api:region:account:api-id/stage/METHOD/resource  → needs prod/*/*
+	// WebSocket: arn:aws:execute-api:region:account:api-id/stage/$connect         → needs prod/*
+	// Include both patterns so the same authorizer works for both API types.
+	resources := wildcardArns(event.MethodArn)
 
 	resp := events.APIGatewayCustomAuthorizerResponse{
 		PrincipalID: claims.KeyID.String(),
@@ -70,7 +88,7 @@ func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest
 				{
 					Action:   []string{"execute-api:Invoke"},
 					Effect:   "Allow",
-					Resource: []string{resource},
+					Resource: resources,
 				},
 			},
 		},
@@ -140,14 +158,17 @@ func deny(principalID, methodArn string) events.APIGatewayCustomAuthorizerRespon
 	}
 }
 
-func wildcardArn(methodArn string) string {
-	// methodArn: arn:aws:execute-api:us-east-1:123456789:abcdef123/prod/GET/v1/org
-	// We want:   arn:aws:execute-api:us-east-1:123456789:abcdef123/prod/*/*
+func wildcardArns(methodArn string) []string {
+	// methodArn examples:
+	//   REST:      arn:aws:execute-api:us-east-1:123:abc/prod/GET/v1/org
+	//   WebSocket: arn:aws:execute-api:us-east-1:123:abc/prod/$connect
+	// Return both single and double wildcard patterns so the policy covers both.
 	parts := strings.Split(methodArn, "/")
 	if len(parts) >= 2 {
-		return parts[0] + "/" + parts[1] + "/*/*"
+		base := parts[0] + "/" + parts[1]
+		return []string{base + "/*", base + "/*/*"}
 	}
-	return methodArn
+	return []string{methodArn}
 }
 
 func scopeStrings(scopes []authpkg.Scope) []string {
