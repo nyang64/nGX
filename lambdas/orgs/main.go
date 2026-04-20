@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -92,6 +93,7 @@ func patchOrg(ctx context.Context, event events.APIGatewayProxyRequest, claims *
 func listPods(ctx context.Context, claims *authpkg.Claims) (events.APIGatewayProxyResponse, error) {
 	pods, err := fetchPods(ctx, claims.OrgID)
 	if err != nil {
+		slog.Error("orgs: list pods", "error", err)
 		return shared.Error(500, "failed to list pods"), nil
 	}
 	if pods == nil {
@@ -195,24 +197,31 @@ func fetchOrg(ctx context.Context, orgID uuid.UUID) (*models.Organization, error
 }
 
 func fetchPods(ctx context.Context, orgID uuid.UUID) ([]*models.Pod, error) {
-	rows, err := pool.Query(ctx,
-		`SELECT id, org_id, name, slug, description, settings, created_at, updated_at
-		 FROM pods WHERE org_id = $1 ORDER BY created_at ASC`,
-		orgID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("list pods: %w", err)
-	}
-	defer rows.Close()
 	var pods []*models.Pod
-	for rows.Next() {
-		var pod models.Pod
-		if err := rows.Scan(&pod.ID, &pod.OrgID, &pod.Name, &pod.Slug, &pod.Description, &pod.Settings, &pod.CreatedAt, &pod.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scan pod: %w", err)
+	err := dbpkg.WithOrgTx(ctx, pool, orgID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT id, org_id, name, slug, description, settings, created_at, updated_at
+			 FROM pods WHERE org_id = $1 ORDER BY created_at ASC`,
+			orgID,
+		)
+		if err != nil {
+			return fmt.Errorf("list pods: %w", err)
 		}
-		pods = append(pods, &pod)
-	}
-	return pods, rows.Err()
+		defer rows.Close()
+		for rows.Next() {
+			var pod models.Pod
+			var desc *string
+			if err := rows.Scan(&pod.ID, &pod.OrgID, &pod.Name, &pod.Slug, &desc, &pod.Settings, &pod.CreatedAt, &pod.UpdatedAt); err != nil {
+				return fmt.Errorf("scan pod: %w", err)
+			}
+			if desc != nil {
+				pod.Description = *desc
+			}
+			pods = append(pods, &pod)
+		}
+		return rows.Err()
+	})
+	return pods, err
 }
 
 func insertPod(ctx context.Context, pod *models.Pod) error {
@@ -229,16 +238,22 @@ func insertPod(ctx context.Context, pod *models.Pod) error {
 
 func fetchPod(ctx context.Context, orgID, podID uuid.UUID) (*models.Pod, error) {
 	var pod models.Pod
-	err := pool.QueryRow(ctx,
-		`SELECT id, org_id, name, slug, description, settings, created_at, updated_at
-		 FROM pods WHERE org_id = $1 AND id = $2`,
-		orgID, podID,
-	).Scan(&pod.ID, &pod.OrgID, &pod.Name, &pod.Slug, &pod.Description, &pod.Settings, &pod.CreatedAt, &pod.UpdatedAt)
+	var desc *string
+	err := dbpkg.WithOrgTx(ctx, pool, orgID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT id, org_id, name, slug, description, settings, created_at, updated_at
+			 FROM pods WHERE org_id = $1 AND id = $2`,
+			orgID, podID,
+		).Scan(&pod.ID, &pod.OrgID, &pod.Name, &pod.Slug, &desc, &pod.Settings, &pod.CreatedAt, &pod.UpdatedAt)
+	})
 	if err != nil {
 		if dbpkg.IsNotFound(err) {
 			return nil, fmt.Errorf("pod not found")
 		}
 		return nil, fmt.Errorf("get pod: %w", err)
+	}
+	if desc != nil {
+		pod.Description = *desc
 	}
 	return &pod, nil
 }
