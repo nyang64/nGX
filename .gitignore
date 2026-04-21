@@ -29,6 +29,7 @@ go.work.sum
 # Environment / Secrets
 # ------------------------------------------------------------
 .env
+.env.outputs
 .env.local
 .env.*.local
 *.pem

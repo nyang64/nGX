@@ -62,6 +62,16 @@ output "sqs_webhook_delivery_url" {
   value       = aws_sqs_queue.webhook_delivery.url
 }
 
+output "sqs_ws_dispatch_url" {
+  description = "SQS queue URL for WebSocket event dispatch"
+  value       = aws_sqs_queue.ws_dispatch.url
+}
+
+output "sqs_embedder_url" {
+  description = "SQS queue URL for embedding jobs (leave empty to disable semantic search)"
+  value       = aws_sqs_queue.embedder.url
+}
+
 output "ses_events_queue_url" {
   description = "SQS queue URL for SES bounce/complaint events"
   value       = aws_sqs_queue.ses_events.url
