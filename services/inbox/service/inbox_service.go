@@ -34,9 +34,9 @@ type CreateInboxRequest struct {
 
 // UpdateInboxRequest is the input for updating an inbox.
 type UpdateInboxRequest struct {
-	DisplayName *string
-	Status      *string
-	Settings    map[string]any
+	DisplayName *string        `json:"display_name,omitempty"`
+	Status      *string        `json:"status,omitempty"`
+	Settings    map[string]any `json:"settings,omitempty"`
 }
 
 // InboxService handles inbox business logic.

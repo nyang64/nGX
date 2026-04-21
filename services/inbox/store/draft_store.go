@@ -121,7 +121,7 @@ func (s *PostgresDraftStore) List(ctx context.Context, tx pgx.Tx, orgID, inboxID
 
 	args := []any{orgID, inboxID}
 	argIdx := 3
-	where := "org_id = $1 AND inbox_id = $2"
+	where := "org_id = $1 AND inbox_id = $2 AND review_status = 'pending'"
 
 	if cursor != "" {
 		parts, err := pagination.DecodeCursor(cursor)

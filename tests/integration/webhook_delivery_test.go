@@ -66,7 +66,7 @@ func TestWebhookEventDelivery(t *testing.T) {
 	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
 
 	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
-		"to":        []map[string]any{{"email": "webhook-test@example.com"}},
+		"to":        []map[string]any{{"email": "success@simulator.amazonses.com"}},
 		"subject":   "Webhook event test " + uniqueName("subj"),
 		"body_text": "Integration test webhook event delivery",
 	})
@@ -121,9 +121,9 @@ func TestWebhookDeliveryRecord(t *testing.T) {
 	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
 
 	code, _, err = c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
-		"to":        []map[string]any{{"email": "whdr-test@example.com"}},
+		"to":        []map[string]any{{"email": "success@simulator.amazonses.com"}},
 		"subject":   "Webhook delivery record test",
-		"body_text":  "body",
+		"body_text": "body",
 	})
 	if err != nil {
 		t.Fatal(err)

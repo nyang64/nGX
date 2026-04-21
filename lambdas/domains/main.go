@@ -81,8 +81,8 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			return shared.JSON(201, result), nil
 		}
 
-	case "/v1/domains/{domainId}":
-		domainID, err := shared.ParseUUID(shared.PathParam(event, "domainId"))
+	case "/v1/domains/{domain_id}":
+		domainID, err := shared.ParseUUID(shared.PathParam(event, "domain_id"))
 		if err != nil {
 			return shared.Error(400, "invalid domain ID"), nil
 		}
@@ -100,9 +100,9 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			return events.APIGatewayProxyResponse{StatusCode: 204}, nil
 		}
 
-	case "/v1/domains/{domainId}/verify":
+	case "/v1/domains/{domain_id}/verify":
 		if event.HTTPMethod == "POST" {
-			domainID, err := shared.ParseUUID(shared.PathParam(event, "domainId"))
+			domainID, err := shared.ParseUUID(shared.PathParam(event, "domain_id"))
 			if err != nil {
 				return shared.Error(400, "invalid domain ID"), nil
 			}

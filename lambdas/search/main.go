@@ -127,7 +127,7 @@ func keywordSearch(ctx context.Context, orgID uuid.UUID, query string, inboxID *
 		if err != nil || len(parts) < 2 {
 			return nil, "", fmt.Errorf("invalid cursor")
 		}
-		cursorFilter = fmt.Sprintf("AND (m.received_at, m.id) < ($%d::timestamptz, $%d::uuid)", argIdx, argIdx+1)
+		cursorFilter = fmt.Sprintf("AND (COALESCE(m.received_at, m.sent_at, m.created_at), m.id) < ($%d::timestamptz, $%d::uuid)", argIdx, argIdx+1)
 		args = append(args, parts[0], parts[1])
 		argIdx += 2
 	}
@@ -145,7 +145,7 @@ func keywordSearch(ctx context.Context, orgID uuid.UUID, query string, inboxID *
 		  AND m.search_vector @@ plainto_tsquery('english', $1)
 		  AND (%s::uuid IS NULL OR m.inbox_id = %s::uuid)
 		  %s
-		ORDER BY rank DESC, m.received_at DESC
+		ORDER BY rank DESC, COALESCE(m.received_at, m.sent_at, m.created_at) DESC, m.id DESC
 		LIMIT $%d`, inboxFilter, inboxFilter, cursorFilter, argIdx)
 
 	return runSearch(ctx, sql, args, limit)
@@ -174,7 +174,7 @@ func semanticSearch(ctx context.Context, orgID uuid.UUID, query string, inboxID 
 		if err != nil || len(parts) < 2 {
 			return nil, "", fmt.Errorf("invalid cursor")
 		}
-		cursorFilter = fmt.Sprintf("AND (m.received_at, m.id) < ($%d::timestamptz, $%d::uuid)", argIdx, argIdx+1)
+		cursorFilter = fmt.Sprintf("AND (COALESCE(m.received_at, m.sent_at, m.created_at), m.id) < ($%d::timestamptz, $%d::uuid)", argIdx, argIdx+1)
 		args = append(args, parts[0], parts[1])
 		argIdx += 2
 	}
@@ -192,7 +192,7 @@ func semanticSearch(ctx context.Context, orgID uuid.UUID, query string, inboxID 
 		  AND m.embedding IS NOT NULL
 		  AND (%s::uuid IS NULL OR m.inbox_id = %s::uuid)
 		  %s
-		ORDER BY m.embedding <=> $1::vector ASC
+		ORDER BY m.embedding <=> $1::vector ASC, COALESCE(m.received_at, m.sent_at, m.created_at) DESC, m.id DESC
 		LIMIT $%d`, inboxFilter, inboxFilter, cursorFilter, argIdx)
 
 	return runSearch(ctx, sql, args, limit)
@@ -226,11 +226,15 @@ func runSearch(ctx context.Context, sql string, args []any, limit int) ([]search
 	if len(results) > limit {
 		results = results[:limit]
 		last := results[len(results)-1]
-		var receivedAt string
-		if last.ReceivedAt != nil {
-			receivedAt = last.ReceivedAt.Format(time.RFC3339Nano)
+		cursorTs := last.ReceivedAt
+		if cursorTs == nil {
+			cursorTs = last.SentAt
 		}
-		nextCursor = pagination.EncodeCursor(receivedAt, last.MessageID.String())
+		var tsStr string
+		if cursorTs != nil {
+			tsStr = cursorTs.Format(time.RFC3339Nano)
+		}
+		nextCursor = pagination.EncodeCursor(tsStr, last.MessageID.String())
 	}
 	return results, nextCursor, nil
 }
