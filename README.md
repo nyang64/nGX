@@ -92,7 +92,7 @@ nGX runs entirely on AWS serverless infrastructure — no servers to manage, no 
 | `email_outbound` | SQS | Send via SES API v2, update message status |
 | `event_dispatcher_ws` | SQS | Fan out events → WebSocket connections |
 | `event_dispatcher_webhook` | SQS | Fan out events → webhook delivery queue |
-| `ses_events` | SQS | Handle SES bounce/complaint notifications |
+| `ses_events` | SQS (from EventBridge) | Handle SES bounce/complaint/delivery events |
 | `scheduler_drafts` | EventBridge | Process scheduled drafts |
 | `embedder` | SQS | Generate vector embeddings for semantic search |
 

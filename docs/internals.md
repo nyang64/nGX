@@ -265,31 +265,39 @@ The FIFO queue uses the message UUID as both `MessageGroupId` and
 
 ### 2.5 Bounce and complaint handling (ses_events Lambda)
 
-SES publishes bounce, complaint, and delivery notifications to SNS. SNS
-delivers them to the `ses_events` SQS queue, where the `ses_events` Lambda
-processes them.
+SES publishes bounce, complaint, and delivery events to the **EventBridge
+default event bus** (source `aws.ses`) automatically — no SNS topic needed.
+An EventBridge rule matches these events and routes them to the `ses_events`
+SQS queue, where the `ses_events` Lambda processes them.
 
-The SQS message body is a JSON-encoded SNS wrapper:
+The SQS message body is the raw EventBridge event envelope:
 
 ```json
 {
-  "Type":    "Notification",
-  "Message": "{\"notificationType\":\"Bounce\", \"mail\":{\"messageId\":\"...\",\"headers\":[...]}}"
+  "source":      "aws.ses",
+  "detail-type": "SES Bounce",
+  "detail": {
+    "mail": {
+      "messageId": "ses-assigned-id",
+      "headers": [
+        { "name": "Message-ID", "value": "<uuid@nGX>" }
+      ]
+    }
+  }
 }
 ```
 
 The Lambda:
-1. Unwraps the SNS envelope.
-2. Parses the inner SES notification.
-3. Extracts the RFC 5322 `Message-ID` header from `mail.headers`.
-4. Strips angle brackets (`<id>` → `id`).
-5. Updates the matching message row by `message_id_header`:
+1. Parses the EventBridge envelope directly from the SQS message body.
+2. Extracts the RFC 5322 `Message-ID` header from `detail.mail.headers`.
+3. Strips angle brackets (`<id>` → `id`).
+4. Updates the matching message row by `message_id_header`:
 
-| `notificationType` | DB action |
-|--------------------|-----------|
-| `Bounce` | `status = 'failed'` |
-| `Complaint` | `status = 'failed'` |
-| `Delivery` | `status = 'sent'`, `sent_at = now()` |
+| `detail-type` | DB action |
+|---------------|-----------|
+| `SES Bounce` | `status = 'failed'` |
+| `SES Complaint` | `status = 'failed'` |
+| `SES Message Delivery` | `status = 'sent'`, `sent_at = now()` |
 
 The `ses_events` Lambda bypasses RLS because it does not have an org context
 — it matches messages by the global `message_id_header` column.

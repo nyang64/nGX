@@ -29,7 +29,7 @@ are available by default in a new account):
 - SES (see SES-specific requirements below)
 - VPC (default limit is 5 VPCs per region — this stack creates 1)
 - EC2 t2.micro (bastion)
-- S3, SQS, SNS, Secrets Manager, CloudWatch, EventBridge, SSM
+- S3, SQS, Secrets Manager, CloudWatch, EventBridge, SSM
 
 nGX deploys into a single AWS region. Choose the region before you start
 and do not change it later without a full destroy + redeploy.
@@ -156,7 +156,7 @@ under a name of your choosing.
 The paver profile must be configured in `~/.aws/config` and point to an IAM
 principal (user or assumed role) with at minimum:
 
-- Full permissions on: IAM, VPC/EC2, Lambda, API Gateway, SES, SQS, SNS,
+- Full permissions on: IAM, VPC/EC2, Lambda, API Gateway, SES, SQS,
   S3, RDS/Aurora, RDS Proxy, Secrets Manager, CloudWatch Logs, EventBridge,
   SSM, and ACM
 - The ability to pass IAM roles to Lambda (`iam:PassRole`)
@@ -221,7 +221,7 @@ dependencies. This applies equally to a fresh deploy and a redeploy.
 | API Gateway REST API (routes, authorizer, stages) | URL changes — expected |
 | API Gateway WebSocket API | URL changes — expected |
 | EventBridge scheduled rules | Fully declarative |
-| SNS topics and SES→SNS subscriptions | Fully declarative |
+| EventBridge rules (ses_events + scheduler_drafts) | Fully declarative |
 | Aurora Serverless v2 cluster + instances | Data is lost on destroy — expected |
 | RDS Proxy | Endpoint changes — expected |
 | Secrets Manager secret (DB password) | Password regenerated — expected |
