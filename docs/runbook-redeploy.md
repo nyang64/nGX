@@ -50,7 +50,7 @@ Terraform cannot delete the cluster while this is active.
 **Fix — run before `terraform destroy`:**
 ```bash
 aws rds modify-db-cluster \
-  --profile nyk-tf --region us-east-1 \
+  --profile $TF_PAVER_PROFILE --region us-east-1 \
   --db-cluster-identifier ngx-prod-cluster \
   --no-deletion-protection
 ```
@@ -63,9 +63,9 @@ a bucket that contains objects.
 **Fix — run before `terraform destroy`:**
 ```bash
 # Emails and attachments — destructive, back up first if needed
-aws s3 rm s3://ngx-prod-emails       --recursive --profile nyk-tf --region us-east-1
-aws s3 rm s3://ngx-prod-attachments  --recursive --profile nyk-tf --region us-east-1
-aws s3 rm s3://ngx-prod-lambda-artifacts --recursive --profile nyk-tf --region us-east-1
+aws s3 rm s3://ngx-prod-emails       --recursive --profile $TF_PAVER_PROFILE --region us-east-1
+aws s3 rm s3://ngx-prod-attachments  --recursive --profile $TF_PAVER_PROFILE --region us-east-1
+aws s3 rm s3://ngx-prod-lambda-artifacts --recursive --profile $TF_PAVER_PROFILE --region us-east-1
 ```
 
 > **Data warning:** Emails and attachments stored in S3 are permanently deleted.
@@ -84,6 +84,77 @@ make build-lambdas
 
 ---
 
+## The Terraform Paver Profile
+
+All commands in this runbook that touch AWS infrastructure require an AWS CLI
+profile with broad IAM permissions — enough to create, modify, and destroy
+VPCs, IAM roles, Lambda functions, Aurora clusters, SQS queues, S3 buckets,
+API Gateway, SES identities, and more. We call this a **terraform paver
+profile**: a dedicated AWS profile whose sole purpose is to provision and
+tear down infrastructure.
+
+In nyklabs' own deployment the profile is named **`nyk-tf`**. If you are
+deploying nGX into your own AWS account you will need an equivalent profile
+under a name of your choosing.
+
+### What the paver profile needs
+
+The paver profile must be configured in `~/.aws/config` and point to an IAM
+principal (user or assumed role) with at minimum:
+
+- Full permissions on: IAM, VPC/EC2, Lambda, API Gateway, SES, SQS, SNS,
+  S3, RDS/Aurora, RDS Proxy, Secrets Manager, CloudWatch Logs, EventBridge,
+  SSM, and ACM
+- The ability to pass IAM roles to Lambda (`iam:PassRole`)
+
+A simple starting point is attaching `AdministratorAccess` to a dedicated
+infrastructure IAM user or role and never using it for anything other than
+Terraform runs. Scope it down after the initial deployment if your security
+posture requires it.
+
+### Configuring your paver profile
+
+```ini
+# ~/.aws/config
+[profile my-tf-paver]
+region = us-east-1
+```
+
+```ini
+# ~/.aws/credentials
+[my-tf-paver]
+aws_access_key_id     = AKIA...
+aws_secret_access_key = ...
+```
+
+Or use an assumed role:
+
+```ini
+# ~/.aws/config
+[profile my-tf-paver]
+role_arn             = arn:aws:iam::<account-id>:role/TerraformPaverRole
+source_profile       = default
+region               = us-east-1
+```
+
+### Setting your profile name
+
+Replace every occurrence of `nyk-tf` in this runbook with your own profile
+name. To avoid editing every command, export it once at the start of your
+session:
+
+```bash
+export TF_PAVER_PROFILE=my-tf-paver   # set to your profile name
+```
+
+The steps below use `$TF_PAVER_PROFILE` so you only need to set this once.
+
+> **Important:** The paver profile's default region may not be `us-east-1`.
+> Always pass `--region us-east-1` (or your chosen region) explicitly to AWS
+> CLI commands, as shown in each step. Do not rely on the profile default.
+
+---
+
 ## Full Redeploy Procedure
 
 ### Step 1 — Pre-destroy preparation
@@ -91,21 +162,21 @@ make build-lambdas
 ```bash
 # Disable Aurora deletion protection
 aws rds modify-db-cluster \
-  --profile nyk-tf --region us-east-1 \
+  --profile $TF_PAVER_PROFILE --region us-east-1 \
   --db-cluster-identifier ngx-prod-cluster \
   --no-deletion-protection
 
 # Empty S3 buckets (back up data first if needed)
-aws s3 rm s3://ngx-prod-emails           --recursive --profile nyk-tf --region us-east-1
-aws s3 rm s3://ngx-prod-attachments      --recursive --profile nyk-tf --region us-east-1
-aws s3 rm s3://ngx-prod-lambda-artifacts --recursive --profile nyk-tf --region us-east-1
+aws s3 rm s3://ngx-prod-emails           --recursive --profile $TF_PAVER_PROFILE --region us-east-1
+aws s3 rm s3://ngx-prod-attachments      --recursive --profile $TF_PAVER_PROFILE --region us-east-1
+aws s3 rm s3://ngx-prod-lambda-artifacts --recursive --profile $TF_PAVER_PROFILE --region us-east-1
 ```
 
 ### Step 2 — Destroy
 
 ```bash
 source loadenv.sh
-AWS_PROFILE=nyk-tf terraform -chdir=terraform destroy
+AWS_PROFILE=$TF_PAVER_PROFILE terraform -chdir=terraform destroy
 ```
 
 Expect this to take 15–25 minutes. Aurora and NAT gateways are the slowest to
@@ -122,7 +193,7 @@ make build-lambdas
 
 ```bash
 source loadenv.sh
-AWS_PROFILE=nyk-tf terraform -chdir=terraform apply
+AWS_PROFILE=$TF_PAVER_PROFILE terraform -chdir=terraform apply
 ```
 
 Expect 20–30 minutes. Aurora cluster provisioning and RDS Proxy creation
@@ -134,7 +205,7 @@ All resource IDs change on a fresh apply (API GW IDs, SQS URLs, RDS proxy
 endpoint). Regenerate `.env.outputs`:
 
 ```bash
-scripts/sync-env.sh --profile nyk-tf
+scripts/sync-env.sh --profile $TF_PAVER_PROFILE
 source loadenv.sh
 ```
 
@@ -171,7 +242,7 @@ Then wait for DNS propagation and check status:
 ```bash
 # Poll until Status = "Success" (usually 5–15 minutes)
 aws ses get-identity-verification-attributes \
-  --profile nyk-tf --region us-east-1 \
+  --profile $TF_PAVER_PROFILE --region us-east-1 \
   --identities mail.agent-mx.cc \
   --query 'VerificationAttributes.*.VerificationStatus'
 ```
@@ -183,7 +254,7 @@ The fresh Aurora cluster has no schema. Connect via SSM tunnel and migrate:
 ```bash
 # Open SSM tunnel (leaves it running in background)
 aws ssm start-session \
-  --profile nyk-tf --region us-east-1 \
+  --profile $TF_PAVER_PROFILE --region us-east-1 \
   --target i-<new-bastion-instance-id> \
   --document-name AWS-StartPortForwardingSessionToRemoteHost \
   --parameters '{"host":["'"$RDS_PROXY_ENDPOINT"'"],"portNumber":["5432"],"localPortNumber":["15432"]}' &
@@ -196,7 +267,7 @@ DATABASE_URL="postgres://${TF_VAR_db_username}:<password>@127.0.0.1:15432/${TF_V
 > Get `<password>` from Secrets Manager:
 > ```bash
 > aws secretsmanager get-secret-value \
->   --profile nyk-tf --region us-east-1 \
+>   --profile $TF_PAVER_PROFILE --region us-east-1 \
 >   --secret-id $(terraform -chdir=terraform output -raw db_secret_arn) \
 >   --query SecretString --output text | jq -r '.password'
 > ```
