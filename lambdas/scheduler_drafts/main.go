@@ -59,7 +59,6 @@ func handler(ctx context.Context, _ map[string]interface{}) error {
 		SELECT id, org_id FROM drafts
 		WHERE scheduled_at <= NOW()
 		  AND review_status = 'pending'
-		  AND sent_at IS NULL
 		LIMIT 100
 	`)
 	if err != nil {
