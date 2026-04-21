@@ -70,6 +70,7 @@ func (s *PostgresDraftStore) Create(ctx context.Context, tx pgx.Tx, draft *model
 			subject, body_text, body_html,
 			metadata, review_status, review_note,
 			reviewed_by, reviewed_at,
+			scheduled_at,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4,
@@ -77,7 +78,8 @@ func (s *PostgresDraftStore) Create(ctx context.Context, tx pgx.Tx, draft *model
 			$8, $9, $10,
 			$11, $12, $13,
 			$14, $15,
-			$16, $17
+			$16,
+			$17, $18
 		)
 	`
 	var reviewedBy *string
@@ -91,6 +93,7 @@ func (s *PostgresDraftStore) Create(ctx context.Context, tx pgx.Tx, draft *model
 		draft.Subject, draft.TextBody, draft.HtmlBody,
 		metaJSON, string(draft.ReviewStatus), draft.ReviewNote,
 		reviewedBy, draft.ReviewedAt,
+		draft.ScheduledAt,
 		draft.CreatedAt, draft.UpdatedAt,
 	)
 	if err != nil {
@@ -107,6 +110,7 @@ func (s *PostgresDraftStore) GetByID(ctx context.Context, tx pgx.Tx, orgID, draf
 		       subject, body_text, body_html,
 		       metadata, review_status, review_note,
 		       reviewed_by, reviewed_at,
+		       scheduled_at,
 		       created_at, updated_at
 		FROM drafts
 		WHERE org_id = $1 AND id = $2
@@ -140,6 +144,7 @@ func (s *PostgresDraftStore) List(ctx context.Context, tx pgx.Tx, orgID, inboxID
 		       subject, body_text, body_html,
 		       metadata, review_status, review_note,
 		       reviewed_by, reviewed_at,
+		       scheduled_at,
 		       created_at, updated_at
 		FROM drafts
 		WHERE %s
@@ -264,6 +269,7 @@ func (s *PostgresDraftStore) Update(ctx context.Context, tx pgx.Tx, orgID, draft
 		          subject, body_text, body_html,
 		          metadata, review_status, review_note,
 		          reviewed_by, reviewed_at,
+		          scheduled_at,
 		          created_at, updated_at
 	`, joinClauses(setClauses), argIdx, argIdx+1)
 
@@ -294,6 +300,7 @@ func scanDraft(row pgx.Row) (*models.Draft, error) {
 		&d.Subject, &d.TextBody, &d.HtmlBody,
 		&metaJSON, &d.ReviewStatus, &d.ReviewNote,
 		&reviewedBy, &d.ReviewedAt,
+		&d.ScheduledAt,
 		&d.CreatedAt, &d.UpdatedAt,
 	)
 	if err != nil {
@@ -322,6 +329,7 @@ func scanDraftRows(rows pgx.Rows) (*models.Draft, error) {
 		&d.Subject, &d.TextBody, &d.HtmlBody,
 		&metaJSON, &d.ReviewStatus, &d.ReviewNote,
 		&reviewedBy, &d.ReviewedAt,
+		&d.ScheduledAt,
 		&d.CreatedAt, &d.UpdatedAt,
 	)
 	if err != nil {
