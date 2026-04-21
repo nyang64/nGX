@@ -10,7 +10,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"os"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -27,6 +29,10 @@ var (
 )
 
 func init() {
+	// Skip DB init when DATABASE_URL is not set (e.g. unit test environments).
+	if os.Getenv("DATABASE_URL") == "" {
+		return
+	}
 	pool = shared.InitDB()
 	emailSt = emailstore.NewEmailStore(pool)
 }
@@ -94,8 +100,11 @@ func processRecord(ctx context.Context, record events.SQSMessage) error {
 
 	switch evt.DetailType {
 	case "SES Bounce", "SES Complaint":
+		if pool == nil {
+			return fmt.Errorf("ses_events: database pool not initialised")
+		}
 		_, err := pool.Exec(ctx,
-			`UPDATE messages SET status = $1, updated_at = NOW() WHERE message_id = $2`,
+			`UPDATE messages SET status = $1, updated_at = NOW() WHERE message_id_header = $2`,
 			string(models.MessageStatusFailed), rfc5322MsgID,
 		)
 		if err != nil {
@@ -103,9 +112,12 @@ func processRecord(ctx context.Context, record events.SQSMessage) error {
 		}
 		slog.Info("ses_events: marked message failed", "type", evt.DetailType, "message_id", rfc5322MsgID)
 	case "SES Message Delivery":
+		if pool == nil {
+			return fmt.Errorf("ses_events: database pool not initialised")
+		}
 		_, err := pool.Exec(ctx,
 			`UPDATE messages SET status = $1, sent_at = NOW(), updated_at = NOW()
-			 WHERE message_id = $2 AND status != $1`,
+			 WHERE message_id_header = $2 AND status != $1`,
 			string(models.MessageStatusSent), rfc5322MsgID,
 		)
 		if err != nil {
