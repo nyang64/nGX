@@ -50,7 +50,7 @@ Terraform cannot delete the cluster while this is active.
 **Fix — run before `terraform destroy`:**
 ```bash
 aws rds modify-db-cluster \
-  --profile $TF_PAVER_PROFILE --region us-east-1 \
+  --profile $TF_PAVER_PROFILE --region $TF_AWS_REGION \
   --db-cluster-identifier ngx-prod-cluster \
   --no-deletion-protection
 ```
@@ -63,9 +63,9 @@ a bucket that contains objects.
 **Fix — run before `terraform destroy`:**
 ```bash
 # Emails and attachments — destructive, back up first if needed
-aws s3 rm s3://ngx-prod-emails       --recursive --profile $TF_PAVER_PROFILE --region us-east-1
-aws s3 rm s3://ngx-prod-attachments  --recursive --profile $TF_PAVER_PROFILE --region us-east-1
-aws s3 rm s3://ngx-prod-lambda-artifacts --recursive --profile $TF_PAVER_PROFILE --region us-east-1
+aws s3 rm s3://ngx-prod-emails       --recursive --profile $TF_PAVER_PROFILE --region $TF_AWS_REGION
+aws s3 rm s3://ngx-prod-attachments  --recursive --profile $TF_PAVER_PROFILE --region $TF_AWS_REGION
+aws s3 rm s3://ngx-prod-lambda-artifacts --recursive --profile $TF_PAVER_PROFILE --region $TF_AWS_REGION
 ```
 
 > **Data warning:** Emails and attachments stored in S3 are permanently deleted.
@@ -137,21 +137,19 @@ source_profile       = default
 region               = us-east-1
 ```
 
-### Setting your profile name
+### Setting your profile name and region
 
-Replace every occurrence of `nyk-tf` in this runbook with your own profile
-name. To avoid editing every command, export it once at the start of your
-session:
+Export both variables once at the start of your session. Every command in
+this runbook uses them so you never need to edit individual steps:
 
 ```bash
-export TF_PAVER_PROFILE=my-tf-paver   # set to your profile name
+export TF_PAVER_PROFILE=my-tf-paver   # your paver profile name
+export TF_AWS_REGION=us-east-1        # the AWS region you are deploying into
 ```
 
-The steps below use `$TF_PAVER_PROFILE` so you only need to set this once.
-
-> **Important:** The paver profile's default region may not be `us-east-1`.
-> Always pass `--region us-east-1` (or your chosen region) explicitly to AWS
-> CLI commands, as shown in each step. Do not rely on the profile default.
+> **Important:** Do not rely on the region configured inside the AWS profile —
+> it may differ from the region you are deploying to. Always pass
+> `--region $TF_AWS_REGION` explicitly, as shown in each step.
 
 ---
 
@@ -162,21 +160,21 @@ The steps below use `$TF_PAVER_PROFILE` so you only need to set this once.
 ```bash
 # Disable Aurora deletion protection
 aws rds modify-db-cluster \
-  --profile $TF_PAVER_PROFILE --region us-east-1 \
+  --profile $TF_PAVER_PROFILE --region $TF_AWS_REGION \
   --db-cluster-identifier ngx-prod-cluster \
   --no-deletion-protection
 
 # Empty S3 buckets (back up data first if needed)
-aws s3 rm s3://ngx-prod-emails           --recursive --profile $TF_PAVER_PROFILE --region us-east-1
-aws s3 rm s3://ngx-prod-attachments      --recursive --profile $TF_PAVER_PROFILE --region us-east-1
-aws s3 rm s3://ngx-prod-lambda-artifacts --recursive --profile $TF_PAVER_PROFILE --region us-east-1
+aws s3 rm s3://ngx-prod-emails           --recursive --profile $TF_PAVER_PROFILE --region $TF_AWS_REGION
+aws s3 rm s3://ngx-prod-attachments      --recursive --profile $TF_PAVER_PROFILE --region $TF_AWS_REGION
+aws s3 rm s3://ngx-prod-lambda-artifacts --recursive --profile $TF_PAVER_PROFILE --region $TF_AWS_REGION
 ```
 
 ### Step 2 — Destroy
 
 ```bash
 source loadenv.sh
-AWS_PROFILE=$TF_PAVER_PROFILE terraform -chdir=terraform destroy
+AWS_PROFILE=$TF_PAVER_PROFILE AWS_REGION=$TF_AWS_REGION terraform -chdir=terraform destroy
 ```
 
 Expect this to take 15–25 minutes. Aurora and NAT gateways are the slowest to
@@ -193,7 +191,7 @@ make build-lambdas
 
 ```bash
 source loadenv.sh
-AWS_PROFILE=$TF_PAVER_PROFILE terraform -chdir=terraform apply
+AWS_PROFILE=$TF_PAVER_PROFILE AWS_REGION=$TF_AWS_REGION terraform -chdir=terraform apply
 ```
 
 Expect 20–30 minutes. Aurora cluster provisioning and RDS Proxy creation
@@ -205,7 +203,7 @@ All resource IDs change on a fresh apply (API GW IDs, SQS URLs, RDS proxy
 endpoint). Regenerate `.env.outputs`:
 
 ```bash
-scripts/sync-env.sh --profile $TF_PAVER_PROFILE
+scripts/sync-env.sh --profile $TF_PAVER_PROFILE --region $TF_AWS_REGION
 source loadenv.sh
 ```
 
@@ -242,7 +240,7 @@ Then wait for DNS propagation and check status:
 ```bash
 # Poll until Status = "Success" (usually 5–15 minutes)
 aws ses get-identity-verification-attributes \
-  --profile $TF_PAVER_PROFILE --region us-east-1 \
+  --profile $TF_PAVER_PROFILE --region $TF_AWS_REGION \
   --identities mail.agent-mx.cc \
   --query 'VerificationAttributes.*.VerificationStatus'
 ```
@@ -254,7 +252,7 @@ The fresh Aurora cluster has no schema. Connect via SSM tunnel and migrate:
 ```bash
 # Open SSM tunnel (leaves it running in background)
 aws ssm start-session \
-  --profile $TF_PAVER_PROFILE --region us-east-1 \
+  --profile $TF_PAVER_PROFILE --region $TF_AWS_REGION \
   --target i-<new-bastion-instance-id> \
   --document-name AWS-StartPortForwardingSessionToRemoteHost \
   --parameters '{"host":["'"$RDS_PROXY_ENDPOINT"'"],"portNumber":["5432"],"localPortNumber":["15432"]}' &
@@ -267,7 +265,7 @@ DATABASE_URL="postgres://${TF_VAR_db_username}:<password>@127.0.0.1:15432/${TF_V
 > Get `<password>` from Secrets Manager:
 > ```bash
 > aws secretsmanager get-secret-value \
->   --profile $TF_PAVER_PROFILE --region us-east-1 \
+>   --profile $TF_PAVER_PROFILE --region $TF_AWS_REGION \
 >   --secret-id $(terraform -chdir=terraform output -raw db_secret_arn) \
 >   --query SecretString --output text | jq -r '.password'
 > ```
@@ -370,7 +368,7 @@ terraform {
   backend "s3" {
     bucket         = "ngx-tf-state"
     key            = "prod/terraform.tfstate"
-    region         = "us-east-1"
+    region         = "<your-aws-region>"
     dynamodb_table = "ngx-tf-state-lock"
     encrypt        = true
   }
