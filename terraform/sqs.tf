@@ -99,9 +99,9 @@ resource "aws_sqs_queue" "embedder_dlq" {
 }
 
 # ── SQS: SES Events ───────────────────────────────────────────────────────────
-# SES Configuration Set publishes bounce/complaint/delivery events to the
-# ses_events SNS topic, which fans out to this queue.
-# ses_events Lambda reads and updates message status + publishes domain events.
+# SES publishes bounce/complaint/delivery events to the EventBridge default bus.
+# An EventBridge rule matches aws.ses events and routes them to this queue.
+# ses_events Lambda reads and updates message status.
 
 resource "aws_sqs_queue" "ses_events" {
   name                       = local.sqs_names.ses_events
@@ -109,7 +109,7 @@ resource "aws_sqs_queue" "ses_events" {
   message_retention_seconds  = 86400 # 24 hours
 }
 
-# SNS requires a queue policy to deliver to SQS
+# Allow EventBridge to deliver SES events to this queue
 resource "aws_sqs_queue_policy" "ses_events" {
   queue_url = aws_sqs_queue.ses_events.id
 
@@ -117,16 +117,16 @@ resource "aws_sqs_queue_policy" "ses_events" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "AllowSNSDelivery"
+        Sid    = "AllowEventBridgeDelivery"
         Effect = "Allow"
         Principal = {
-          Service = "sns.amazonaws.com"
+          Service = "events.amazonaws.com"
         }
         Action   = "sqs:SendMessage"
         Resource = aws_sqs_queue.ses_events.arn
         Condition = {
           ArnEquals = {
-            "aws:SourceArn" = aws_sns_topic.ses_events.arn
+            "aws:SourceArn" = aws_cloudwatch_event_rule.ses_events.arn
           }
         }
       }

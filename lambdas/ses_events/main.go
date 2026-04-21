@@ -22,19 +22,13 @@ import (
 )
 
 var (
-	pool      *pgxpool.Pool
-	emailSt   *emailstore.EmailStore
+	pool    *pgxpool.Pool
+	emailSt *emailstore.EmailStore
 )
 
 func init() {
 	pool = shared.InitDB()
 	emailSt = emailstore.NewEmailStore(pool)
-}
-
-// sesNotification is the SNS message body wrapping the SES event.
-type snsWrapper struct {
-	Type    string `json:"Type"`
-	Message string `json:"Message"`
 }
 
 // sesMailHeader is a single header from the SES notification.
@@ -49,10 +43,16 @@ type sesMail struct {
 	Headers   []sesMailHeader `json:"headers"`
 }
 
-// sesNotificationPayload is the inner JSON in the SNS Message field.
-type sesNotificationPayload struct {
-	NotificationType string  `json:"notificationType"`
-	Mail             sesMail `json:"mail"`
+// ebSESEvent is the EventBridge envelope for native SES events.
+// SES publishes to the default event bus with source "aws.ses".
+// detail-type is one of: "SES Bounce", "SES Complaint", "SES Message Delivery".
+type ebSESEvent struct {
+	DetailType string    `json:"detail-type"`
+	Detail     ebDetail  `json:"detail"`
+}
+
+type ebDetail struct {
+	Mail sesMail `json:"mail"`
 }
 
 func handler(ctx context.Context, sqsEvent events.SQSEvent) (events.SQSEventResponse, error) {
@@ -67,22 +67,16 @@ func handler(ctx context.Context, sqsEvent events.SQSEvent) (events.SQSEventResp
 }
 
 func processRecord(ctx context.Context, record events.SQSMessage) error {
-	// SES → SNS → SQS: the SQS body is the SNS notification JSON.
-	var sns snsWrapper
-	if err := json.Unmarshal([]byte(record.Body), &sns); err != nil {
-		slog.Warn("ses_events: unmarshal SNS wrapper, skipping", "error", err)
-		return nil
-	}
-
-	var payload sesNotificationPayload
-	if err := json.Unmarshal([]byte(sns.Message), &payload); err != nil {
-		slog.Warn("ses_events: unmarshal SES payload, skipping", "error", err)
+	// SES → EventBridge → SQS: the SQS body is the EventBridge event JSON.
+	var evt ebSESEvent
+	if err := json.Unmarshal([]byte(record.Body), &evt); err != nil {
+		slog.Warn("ses_events: unmarshal EventBridge event, skipping", "error", err)
 		return nil
 	}
 
 	// Extract RFC 5322 Message-ID from the mail headers.
 	var rfc5322MsgID string
-	for _, h := range payload.Mail.Headers {
+	for _, h := range evt.Detail.Mail.Headers {
 		if h.Name == "Message-ID" || h.Name == "Message-Id" {
 			rfc5322MsgID = h.Value
 			// Strip angle brackets.
@@ -94,12 +88,12 @@ func processRecord(ctx context.Context, record events.SQSMessage) error {
 	}
 
 	if rfc5322MsgID == "" {
-		slog.Debug("ses_events: no Message-ID header, skipping", "ses_msg_id", payload.Mail.MessageID)
+		slog.Debug("ses_events: no Message-ID header, skipping", "ses_msg_id", evt.Detail.Mail.MessageID)
 		return nil
 	}
 
-	switch payload.NotificationType {
-	case "Bounce", "Complaint":
+	switch evt.DetailType {
+	case "SES Bounce", "SES Complaint":
 		_, err := pool.Exec(ctx,
 			`UPDATE messages SET status = $1, updated_at = NOW() WHERE message_id = $2`,
 			string(models.MessageStatusFailed), rfc5322MsgID,
@@ -107,8 +101,8 @@ func processRecord(ctx context.Context, record events.SQSMessage) error {
 		if err != nil {
 			return err
 		}
-		slog.Info("ses_events: marked message failed", "type", payload.NotificationType, "message_id", rfc5322MsgID)
-	case "Delivery":
+		slog.Info("ses_events: marked message failed", "type", evt.DetailType, "message_id", rfc5322MsgID)
+	case "SES Message Delivery":
 		_, err := pool.Exec(ctx,
 			`UPDATE messages SET status = $1, sent_at = NOW(), updated_at = NOW()
 			 WHERE message_id = $2 AND status != $1`,
@@ -119,7 +113,7 @@ func processRecord(ctx context.Context, record events.SQSMessage) error {
 		}
 		slog.Info("ses_events: confirmed delivery", "message_id", rfc5322MsgID)
 	default:
-		slog.Debug("ses_events: unknown notification type, skipping", "type", payload.NotificationType)
+		slog.Debug("ses_events: unknown detail-type, skipping", "detail-type", evt.DetailType)
 	}
 	return nil
 }

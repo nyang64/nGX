@@ -1,10 +1,29 @@
-# EventBridge scheduled rules.
+# EventBridge rules.
 #
-# Bounce detection is removed — SES Configuration Set publishes bounce/complaint
-# events in real time via SNS ses_events → SQS ses_events → ses_events Lambda.
-# No polling scheduler needed for bounces.
+# 1. ses_events  — matches native SES events (Bounce/Complaint/Delivery) on the
+#                  default event bus and routes them to the ses_events SQS queue.
+#                  No SNS topic needed; SES publishes to EventBridge automatically.
 #
-# Only draft expiry remains as a periodic job.
+# 2. scheduler_drafts — periodic job (rate 5m) to expire stale drafts.
+
+# ── SES Events ────────────────────────────────────────────────────────────────
+
+resource "aws_cloudwatch_event_rule" "ses_events" {
+  name        = "${local.prefix}-ses-events"
+  description = "Route SES bounce/complaint/delivery events to ses_events SQS queue"
+
+  event_pattern = jsonencode({
+    source      = ["aws.ses"]
+    detail-type = ["SES Bounce", "SES Complaint", "SES Message Delivery"]
+  })
+}
+
+resource "aws_cloudwatch_event_target" "ses_events" {
+  rule = aws_cloudwatch_event_rule.ses_events.name
+  arn  = aws_sqs_queue.ses_events.arn
+}
+
+# ── Draft Expiry ───────────────────────────────────────────────────────────────
 
 resource "aws_cloudwatch_event_rule" "scheduler_drafts" {
   name                = "${local.prefix}-scheduler-drafts"

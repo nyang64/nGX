@@ -2,7 +2,7 @@
 #
 # Inbound:  SES receives → spam/virus scan → S3 store → S3 notification → SQS → Lambda
 # Outbound: email_outbound Lambda calls ses:SendRawEmail → SES handles DKIM/SMTP delivery
-# Bounces:  SES Configuration Set → SNS ses_events → SQS ses_events → ses_events Lambda
+# Bounces:  SES publishes events to EventBridge default bus → EventBridge rule → SQS ses_events → ses_events Lambda
 
 # ── Domain Identity ────────────────────────────────────────────────────────────
 
@@ -28,23 +28,6 @@ resource "aws_ses_configuration_set" "main" {
 
   reputation_metrics_enabled = true
   sending_enabled            = true
-}
-
-# Route bounce/complaint/delivery events → SNS ses_events → SQS ses_events → Lambda
-resource "aws_ses_event_destination" "bounces" {
-  name                   = "${local.prefix}-bounce-events"
-  configuration_set_name = aws_ses_configuration_set.main.name
-  enabled                = true
-
-  matching_types = [
-    "bounce",
-    "complaint",
-    "delivery",
-  ]
-
-  sns_destination {
-    topic_arn = aws_sns_topic.ses_events.arn
-  }
 }
 
 # ── Inbound: Receipt Rule Set ──────────────────────────────────────────────────
