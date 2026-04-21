@@ -39,7 +39,10 @@ func buildSQSEventWithEBPayload(detailType, sesMessageID, rfc5322MsgID string) [
 				"headers": []map[string]any{
 					{"name": "From", "value": "sender@example.com"},
 					{"name": "To", "value": "recipient@example.com"},
-					{"name": "Message-ID", "value": fmt.Sprintf("<%s>", rfc5322MsgID)},
+					// rfc5322MsgID is stored in the DB without angle brackets.
+				// The Lambda strips <> from the header value before querying,
+				// so we include them here to mirror a real SES EventBridge event.
+				{"name": "Message-ID", "value": fmt.Sprintf("<%s>", rfc5322MsgID)},
 					{"name": "Subject", "value": "Integration test"},
 				},
 			},

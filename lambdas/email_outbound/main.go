@@ -210,6 +210,9 @@ func buildMIME(msg *models.Message, toAddrs, ccAddrs []string, textBody, htmlBod
 	}
 
 	buf.WriteString("MIME-Version: 1.0\r\n")
+	if msg.MessageID != "" {
+		buf.WriteString(fmt.Sprintf("Message-ID: <%s>\r\n", msg.MessageID))
+	}
 	buf.WriteString(fmt.Sprintf("From: %s\r\n", fromAddr))
 	if len(toAddrs) > 0 {
 		buf.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(toAddrs, ", ")))
