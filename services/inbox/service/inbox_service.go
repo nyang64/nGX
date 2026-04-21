@@ -16,7 +16,6 @@ import (
 	"agentmail/pkg/auth"
 	dbpkg "agentmail/pkg/db"
 	"agentmail/pkg/events"
-	"agentmail/pkg/kafka"
 	"agentmail/pkg/models"
 	"agentmail/services/inbox/store"
 
@@ -35,23 +34,23 @@ type CreateInboxRequest struct {
 
 // UpdateInboxRequest is the input for updating an inbox.
 type UpdateInboxRequest struct {
-	DisplayName *string
-	Status      *string
-	Settings    map[string]any
+	DisplayName *string        `json:"display_name,omitempty"`
+	Status      *string        `json:"status,omitempty"`
+	Settings    map[string]any `json:"settings,omitempty"`
 }
 
 // InboxService handles inbox business logic.
 type InboxService struct {
 	pool       *pgxpool.Pool
 	inboxStore store.InboxStore
-	producer   *kafka.Producer
+	producer   events.EventPublisher
 	mailDomain string // default domain for inbox provisioning (from MAIL_DOMAIN)
 }
 
 // NewInboxService creates a new InboxService.
 // mailDomain is the installation-configured default domain (e.g. "mail.acme.com").
 // When an address is supplied without a domain (no "@"), mailDomain is appended automatically.
-func NewInboxService(pool *pgxpool.Pool, inboxStore store.InboxStore, producer *kafka.Producer, mailDomain string) *InboxService {
+func NewInboxService(pool *pgxpool.Pool, inboxStore store.InboxStore, producer events.EventPublisher, mailDomain string) *InboxService {
 	return &InboxService{pool: pool, inboxStore: inboxStore, producer: producer, mailDomain: mailDomain}
 }
 

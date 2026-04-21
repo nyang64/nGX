@@ -1,0 +1,34 @@
+# Copy to terraform.tfvars and fill in values before applying.
+# terraform.tfvars is gitignored.
+
+app_name    = "ngx"
+environment = "prod"
+aws_region  = "us-east-1"
+
+# Networking
+vpc_cidr = "10.0.0.0/16"
+
+# Aurora Serverless v2
+aurora_min_capacity = 0.5
+aurora_max_capacity = 16
+db_name             = "ngx"
+db_username         = "ngxadmin"
+
+# Email
+mail_domain     = "mail.yourdomain.com"
+dkim_selector   = "mail"
+smtp_relay_host = "" # empty = direct MX delivery
+
+# Webhooks
+webhook_max_retries    = 8
+webhook_encryption_key = "" # 64-char hex AES-256 key; generate with: openssl rand -hex 32
+
+# Embedding / semantic search (90-day window)
+embedder_url   = "https://your-embedder-endpoint/v1/embeddings"
+embedder_model = "nomic-embed-text-v1.5"
+
+# Extra tags
+tags = {
+  Owner   = "platform-team"
+  CostCenter = "engineering"
+}

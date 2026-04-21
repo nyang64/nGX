@@ -14,7 +14,6 @@ import (
 	"agentmail/pkg/auth"
 	dbpkg "agentmail/pkg/db"
 	"agentmail/pkg/events"
-	"agentmail/pkg/kafka"
 	"agentmail/pkg/models"
 	"agentmail/services/inbox/store"
 
@@ -28,11 +27,11 @@ type ThreadService struct {
 	pool        *pgxpool.Pool
 	threadStore store.ThreadStore
 	inboxStore  store.InboxStore
-	producer    *kafka.Producer
+	producer    events.EventPublisher
 }
 
 // NewThreadService creates a new ThreadService.
-func NewThreadService(pool *pgxpool.Pool, threadStore store.ThreadStore, inboxStore store.InboxStore, producer *kafka.Producer) *ThreadService {
+func NewThreadService(pool *pgxpool.Pool, threadStore store.ThreadStore, inboxStore store.InboxStore, producer events.EventPublisher) *ThreadService {
 	return &ThreadService{
 		pool:        pool,
 		threadStore: threadStore,

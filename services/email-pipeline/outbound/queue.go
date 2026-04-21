@@ -47,7 +47,7 @@ type QueueConsumer struct {
 	sender     *Sender
 	emailStore *store.EmailStore
 	pool       *pgxpool.Pool
-	producer   *kafka.Producer
+	producer   events.EventPublisher
 }
 
 // NewQueueConsumer wires a QueueConsumer ready to consume from the outbound queue topic.
@@ -57,7 +57,7 @@ func NewQueueConsumer(
 	sender *Sender,
 	emailStore *store.EmailStore,
 	pool *pgxpool.Pool,
-	producer *kafka.Producer,
+	producer events.EventPublisher,
 ) *QueueConsumer {
 	return &QueueConsumer{
 		consumer:   kafka.NewConsumer(brokers, kafka.TopicEmailOutboundQueue, groupID),

@@ -1,0 +1,18 @@
+# Local Terraform state (use remote backend in production)
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+
+# Generated Lambda stub zip
+.build/
+
+# Sensitive variable files
+*.tfvars
+!terraform.tfvars.example
+
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json

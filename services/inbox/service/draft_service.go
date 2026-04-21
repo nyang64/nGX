@@ -17,7 +17,6 @@ import (
 	"agentmail/pkg/auth"
 	dbpkg "agentmail/pkg/db"
 	"agentmail/pkg/events"
-	"agentmail/pkg/kafka"
 	"agentmail/pkg/models"
 	"agentmail/services/inbox/store"
 
@@ -31,27 +30,29 @@ var ErrInvalidReviewStatus = errors.New("draft is not in the required review sta
 
 // CreateDraftRequest is the input for creating a draft.
 type CreateDraftRequest struct {
-	InboxID   uuid.UUID
-	ThreadID  *uuid.UUID
-	Subject   string
-	To        []models.EmailAddress
-	Cc        []models.EmailAddress
-	Bcc       []models.EmailAddress
-	TextBody  string
-	HtmlBody  string
-	InReplyTo string
-	Metadata  map[string]any
+	InboxID     uuid.UUID             `json:"-"`
+	ThreadID    *uuid.UUID            `json:"thread_id,omitempty"`
+	Subject     string                `json:"subject"`
+	To          []models.EmailAddress `json:"to"`
+	Cc          []models.EmailAddress `json:"cc"`
+	Bcc         []models.EmailAddress `json:"bcc"`
+	TextBody    string                `json:"body_text"`
+	HtmlBody    string                `json:"body_html"`
+	InReplyTo   string                `json:"in_reply_to,omitempty"`
+	ScheduledAt *time.Time            `json:"scheduled_at,omitempty"`
+	Metadata    map[string]any        `json:"metadata,omitempty"`
 }
 
 // UpdateDraftRequest is the input for updating a draft.
 type UpdateDraftRequest struct {
-	Subject  *string
-	To       []models.EmailAddress
-	Cc       []models.EmailAddress
-	Bcc      []models.EmailAddress
-	TextBody *string
-	HtmlBody *string
-	Metadata map[string]any
+	Subject     *string               `json:"subject,omitempty"`
+	To          []models.EmailAddress `json:"to"`
+	Cc          []models.EmailAddress `json:"cc"`
+	Bcc         []models.EmailAddress `json:"bcc"`
+	TextBody    *string               `json:"body_text,omitempty"`
+	HtmlBody    *string               `json:"body_html,omitempty"`
+	ScheduledAt *time.Time            `json:"scheduled_at,omitempty"`
+	Metadata    map[string]any        `json:"metadata,omitempty"`
 }
 
 // DraftService handles draft business logic.
@@ -61,8 +62,8 @@ type DraftService struct {
 	messageStore     store.MessageStore
 	threadStore      store.ThreadStore
 	inboxStore       store.InboxStore
-	eventProducer    *kafka.Producer
-	outboundProducer *kafka.Producer
+	eventProducer    events.EventPublisher
+	outboundProducer events.OutboundPublisher
 }
 
 // NewDraftService creates a new DraftService.
@@ -72,8 +73,8 @@ func NewDraftService(
 	messageStore store.MessageStore,
 	threadStore store.ThreadStore,
 	inboxStore store.InboxStore,
-	eventProducer *kafka.Producer,
-	outboundProducer *kafka.Producer,
+	eventProducer events.EventPublisher,
+	outboundProducer events.OutboundPublisher,
 ) *DraftService {
 	return &DraftService{
 		pool:             pool,
@@ -101,6 +102,7 @@ func (s *DraftService) Create(ctx context.Context, claims *auth.Claims, req Crea
 		TextBody:     req.TextBody,
 		HtmlBody:     req.HtmlBody,
 		InReplyTo:    req.InReplyTo,
+		ScheduledAt:  req.ScheduledAt,
 		ReviewStatus: models.DraftReviewStatusPending,
 		Metadata:     req.Metadata,
 		CreatedAt:    now,
@@ -175,13 +177,14 @@ func (s *DraftService) Update(ctx context.Context, claims *auth.Claims, draftID 
 			return ErrInvalidReviewStatus
 		}
 		draft, err = s.draftStore.Update(ctx, tx, claims.OrgID, draftID, store.DraftPatch{
-			Subject:  req.Subject,
-			To:       req.To,
-			Cc:       req.Cc,
-			Bcc:      req.Bcc,
-			TextBody: req.TextBody,
-			HtmlBody: req.HtmlBody,
-			Metadata: req.Metadata,
+			Subject:     req.Subject,
+			To:          req.To,
+			Cc:          req.Cc,
+			Bcc:         req.Bcc,
+			TextBody:    req.TextBody,
+			HtmlBody:    req.HtmlBody,
+			ScheduledAt: req.ScheduledAt,
+			Metadata:    req.Metadata,
 		})
 		return err
 	})

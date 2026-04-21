@@ -24,6 +24,16 @@ type Client struct {
 	bucket string
 }
 
+// NewFromAWS creates an S3 Client using the default AWS credential chain
+// (IAM role, environment variables, etc.) — suitable for Lambda and ECS.
+func NewFromAWS(ctx context.Context, bucket string) (*Client, error) {
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load aws config: %w", err)
+	}
+	return &Client{s3: s3.NewFromConfig(awsCfg), bucket: bucket}, nil
+}
+
 // NewClient constructs an S3 Client from cfg, supporting custom endpoints (e.g. MinIO).
 func NewClient(ctx context.Context, cfg config.S3Config) (*Client, error) {
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,

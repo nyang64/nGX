@@ -1,76 +1,102 @@
 # nGX
 
-**Self-hosted email infrastructure for AI agents.** Deploy on your own domain, your own servers. Your agents get real email addresses at `agent@yourdomain.com` — not `agent@somevendor.to`.
+**Self-hosted email infrastructure for AI agents.** Deploy on your own domain, your own AWS account. Your agents get real email addresses at `agent@yourdomain.com` — not `agent@somevendor.to`.
 
 ## Why nGX
 
-Hosted email-for-agents services give your AI agents email addresses on a vendor's domain. You depend on their uptime, their pricing, and their data policies. nGX is the alternative: a complete email platform you install in your own infrastructure, on your own domain.
+Hosted email-for-agents services give your AI agents email addresses on a vendor's domain. You depend on their uptime, their pricing, and their data policies. nGX is the alternative: a complete email platform you deploy into your own AWS account, on your own domain.
 
-- **You own the domain** — configure `MAIL_DOMAIN=yourdomain.com` and every inbox provisions under your domain
-- **You own the data** — email bodies, attachments, and thread history stay in your PostgreSQL and S3
-- **You own the keys** — DKIM signing uses your private keys; SPF and DMARC point to your DNS
-- **No per-seat subscription** — deploy for as many agents as your hardware supports
-- **Regulatory compliance** — email content never leaves your environment; meet HIPAA, GDPR, SOC 2, and industry-specific data residency requirements without negotiating a vendor BAA or DPA
+- **You own the domain** — configure `MAIL_DOMAIN=mail.yourdomain.com` and every inbox provisions under your domain
+- **You own the data** — email bodies, attachments, and thread history stay in your Aurora and S3
+- **You own the keys** — DKIM signing uses SES, SPF and DMARC point to your DNS
+- **No per-seat subscription** — deploy for as many agents as your AWS account supports
+- **Regulatory compliance** — email content never leaves your AWS account; meet HIPAA, GDPR, SOC 2, and industry-specific data residency requirements without negotiating a vendor BAA or DPA
 
 nGX is designed for enterprises that want the capabilities of a managed email platform without the vendor lock-in or the compliance risk of routing sensitive communications through a third-party SaaS.
 
 ## Features
 
 - **Programmable inboxes** — create/manage email addresses via REST API; supply just a username and nGX appends your configured domain
-- **Full SMTP pipeline** — inbound reception with MIME parsing; outbound MX delivery with DKIM signing and retry
+- **Full email pipeline** — SES inbound reception with MIME parsing; SES outbound delivery with DKIM signing and retry
 - **Thread management** — automatic conversation threading via In-Reply-To/References headers
 - **Real-time events** — WebSocket stream and webhooks with HMAC-SHA256 signatures (`X-nGX-Signature`)
 - **Draft / human-in-the-loop** — agents create drafts, humans approve/reject before sending
+- **Custom domains** — provision per-org custom email domains with automatic SES receipt rules
 - **Multi-tenancy** — Org → Pod → Inbox hierarchy with strict data isolation via PostgreSQL RLS
 - **API key RBAC** — fine-grained scopes (inbox:read, inbox:write, draft:write, org:admin, ...)
 - **Label system** — tag and filter threads
 - **Full-text search** — PostgreSQL tsvector search across subjects and bodies
-- **Event-driven** — Kafka backbone connects all services; emit events to your own consumers
 
 ## Architecture
+
+nGX runs entirely on AWS serverless infrastructure — no servers to manage, no Kafka or Redis clusters to operate.
 
 ```
                     ┌─────────────────────────────────────┐
                     │           CLIENT LAYER              │
-                    │  REST API  │  WebSocket  │  SMTP    │
-                    └─────────────────┬───────────────────┘
-                                      │
-                    ┌────────-─────────▼───────────────────┐
-                    │         API GATEWAY :8080            │
-                    │  Auth · Rate Limit · CORS · Routing  │
-                    └──┬──────────┬──────────┬────-────────┘
-                       │          │          │
-          ┌──────────-─▼─-┐  ┌────▼───┐  ┌──▼────────-──┐
-          │  Auth :8081   │  │ Inbox  │  │  Search      │
-          │  API Key CRUD │  │ :8082  │  │  :8084       │
-          └───────────────┘  └────┬───┘  └────────────-─┘
-                                  │
-          ┌───────────────────────▼───────────-───────────┐
-          │                  KAFKA                        │
-          │  email.inbound.raw · email.outbound.queue     │
-          │  events.fanout · webhooks.delivery            │
-          └──────┬────────────────────┬─────────────────-─┘
-                 │                    │
-    ┌────────────▼──────┐   ┌─────────▼──────────┐
-    │  Email Pipeline   │   │  Event Dispatcher  │
-    │  SMTP :2525       │   │  (Kafka consumer)  │
-    │  Inbound + MX out │   └───────┬────────────┘
-    └───────────────────┘           │
-                            ┌───────┴──────────────┐
-                            │                      │
-               ┌────────────▼──────┐  ┌────────────▼─────-─┐
-               │ Webhook Service   │  │  Redis Pub/Sub     │
-               │ HTTP delivery     │  │  (WS hub)          │
-               └───────────────────┘  └────────────────-───┘
+                    │  REST API  │  WebSocket  │  Email   │
+                    └──────┬──────────┬────────────┬──────┘
+                           │          │            │
+                    ┌──────▼──────────▼──┐    ┌────▼────────────┐
+                    │  API Gateway       │    │  Amazon SES     │
+                    │  REST + WebSocket  │    │  Inbound rules  │
+                    └──────┬─────────────┘    └────┬────────────┘
+                           │                       │
+          ┌────────────────┼───────────────────────┤
+          │                │                       │
+   ┌──────▼──────┐  ┌──────▼──────┐   ┌────────────▼──────────┐
+   │  Authorizer │  │  REST       │   │  SQS Queues           │
+   │  Lambda     │  │  Lambdas    │   │  email_inbound        │
+   │             │  │  inboxes    │   │  email_outbound       │
+   └─────────────┘  │  messages   │   │  webhook_delivery     │
+                    │  threads    │   │  ws_dispatch          │
+                    │  drafts     │   │  ses_events           │
+                    │  domains    │   │  embedder             │
+                    │  orgs/keys  │   └────────────┬──────────┘
+                    │  search     │                │
+                    └─────────────┘    ┌───────────▼───────────┐
+                                       │  Worker Lambdas       │
+                                       │  email_inbound        │
+                                       │  email_outbound       │
+                                       │  event_dispatcher_ws  │
+                                       │  event_dispatcher_wh  │
+                                       │  scheduler_drafts     │
+                                       │  ses_events           │
+                                       └───────────────────────┘
 
-  Data Stores (all self-hosted)
-  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
-  │ Postgres │  │  Redis   │  │   S3/    │  │  Kafka   │
-  │ +RLS     │  │ Cache    │  │  MinIO   │  │  Topics  │
-  └──────────┘  └──────────┘  └──────────┘  └──────────┘
+  Data Stores (managed AWS services)
+  ┌─────────────────┐  ┌──────────────┐  ┌─────────────────────┐
+  │ Aurora          │  │  S3 Buckets  │  │  Secrets Manager    │
+  │ PostgreSQL+RLS  │  │  emails      │  │  DB credentials     │
+  │ (via RDS Proxy) │  │  attachments │  │  webhook keys       │
+  └─────────────────┘  └──────────────┘  └─────────────────────┘
 ```
 
-## Tenancy Model
+### Lambda Functions
+
+| Lambda | Trigger | Responsibility |
+|--------|---------|----------------|
+| `authorizer` | API GW | API key validation for all REST routes |
+| `auth` | REST | API key lifecycle (create/list/delete) |
+| `orgs` | REST | Org management |
+| `inboxes` | REST | Inbox/pod CRUD, custom domain management |
+| `messages` | REST | Message send, list, get |
+| `threads` | REST | Thread list, get, label |
+| `drafts` | REST | Draft create/list/approve/reject |
+| `domains` | REST | Custom domain CRUD + SES verification |
+| `search` | REST | Full-text search across messages |
+| `webhooks` | REST | Webhook endpoint CRUD |
+| `ws_connect` | WebSocket | WebSocket $connect handler |
+| `ws_disconnect` | WebSocket | WebSocket $disconnect handler |
+| `email_inbound` | SQS | Parse SES inbound → store message, update thread |
+| `email_outbound` | SQS | Send via SES API v2, update message status |
+| `event_dispatcher_ws` | SQS | Fan out events → WebSocket connections |
+| `event_dispatcher_webhook` | SQS | Fan out events → webhook delivery queue |
+| `ses_events` | SQS | Handle SES bounce/complaint notifications |
+| `scheduler_drafts` | EventBridge | Process scheduled drafts |
+| `embedder` | SQS | Generate vector embeddings for semantic search |
+
+### Tenancy Model
 
 ```
 Organization  (billing root, holds API keys)
@@ -83,312 +109,240 @@ Organization  (billing root, holds API keys)
 
 Every table carries `org_id` and PostgreSQL Row-Level Security enforces tenant isolation at the database layer — it is impossible for one org's query to read another's data.
 
-## Services
-
-| Service | Port | Responsibility |
-|---------|------|----------------|
-| api | 8080 | REST + WebSocket gateway, auth, rate limiting |
-| auth | 8081 | API key lifecycle, RBAC validation |
-| inbox | 8082 | Inbox/thread/message/draft/label business logic |
-| email-pipeline | :2525 (SMTP) | Inbound SMTP reception; outbound MX delivery |
-| event-dispatcher | — | Kafka -> Redis pub/sub + webhook fanout |
-| webhook-service | 8083 | HTTP delivery with HMAC signatures + retry |
-| scheduler | — | Bounce check, draft expiry cron jobs |
-| embedder | — | Kafka consumer; generates vector embeddings for messages via OpenAI-compatible server |
-| search | 8084 | PostgreSQL full-text search |
-
-## Quick Start
+## Deployment
 
 ### Prerequisites
+
 - Go 1.23+
-- Docker + Docker Compose
-- Make
-- Your own domain with DNS control (for production deployments)
+- AWS CLI with a profile that has IAM, Lambda, SES, API GW, Aurora, SQS, S3, and Secrets Manager permissions
+- Terraform 1.5+
+- `jq`
+- Your own domain with DNS control (SES sandbox must be lifted for production use)
 
-### 1. Configure your domain
-
-Before starting, set your mail domain. This is what all inboxes will be provisioned under:
+### 1. Configure environment
 
 ```bash
 cp .env.example .env
-# Edit .env and set:
-#   MAIL_DOMAIN=yourdomain.com        # domain part of email addresses, e.g. agent@yourdomain.com
-#   SMTP_HOSTNAME=mail.yourdomain.com # hostname of your mail server (A record, MX, PTR)
-#   DKIM_DOMAIN=yourdomain.com        # must match MAIL_DOMAIN
-#   DKIM_SELECTOR=mail                # matches DNS record: mail._domainkey.yourdomain.com
 ```
 
-For local development you can leave `MAIL_DOMAIN` empty and supply full addresses (e.g. `agent@localhost`) when creating inboxes.
-
-### 2. Bootstrap local environment
-
-Generate a DKIM keypair (stored at `configs/dkim.pem` by convention):
+Edit `.env` and fill in the `TF_VAR_*` values:
 
 ```bash
-mkdir -p configs
-openssl genrsa -out configs/dkim.pem 2048
-# Extract public key for your DNS TXT record (mail._domainkey.yourdomain.com)
-openssl rsa -in configs/dkim.pem -pubout -outform der | openssl base64 -A
+TF_VAR_app_name=ngx
+TF_VAR_environment=prod
+TF_VAR_aws_region=us-east-1
+TF_VAR_mail_domain=mail.yourdomain.com   # subdomain you'll delegate to SES
+TF_VAR_db_name=ngx
+TF_VAR_db_username=ngxadmin
+TF_VAR_webhook_encryption_key=$(openssl rand -hex 32)
 ```
 
-Load environment variables (do this in every new shell session before starting services):
+### 2. Build Lambda binaries
 
 ```bash
-# configs/dkim.pem is the default DKIM private key location
-export DKIM_PRIVATE_KEY_PEM="$(cat configs/dkim.pem)"
+make lambdas   # builds all lambdas to lambdas/bin/<name>/bootstrap (arm64, provided.al2023)
+```
+
+### 3. Deploy infrastructure
+
+```bash
 source loadenv.sh
+AWS_PROFILE=<your-profile> terraform -chdir=terraform init
+AWS_PROFILE=<your-profile> terraform -chdir=terraform apply
 ```
 
-Start infrastructure and run migrations:
+After apply, generate `.env.outputs` with all post-deploy values (endpoints, queue URLs, DB URL):
 
 ```bash
-make setup       # installs tools, copies .env.example, starts infra, runs migrations
+scripts/sync-env.sh --profile <your-profile>
+source loadenv.sh   # picks up both .env and .env.outputs
 ```
 
-Or step by step:
+### 4. Run database migrations
+
+Connect via SSM tunnel to the Aurora cluster (bastion instance is in `.env`):
 
 ```bash
-make up          # starts Postgres, Kafka, Redis, MinIO, Mailhog
-make migrate-up  # applies all database migrations
+# Start SSM tunnel (see .env comment for exact command — tunnels Aurora to localhost:15432)
+# Then run migrations:
+DATABASE_URL="postgres://ngxadmin:<password>@127.0.0.1:15432/ngx?sslmode=verify-ca&sslrootcert=/usr/local/etc/openssl@3/cert.pem" \
+  go run ./tools/migrate up
 ```
 
-### 3. Start services
+### 5. Configure SES DNS
+
+After first deploy, Terraform prints `post_deploy_instructions` with the exact DNS records required:
+
+- **MX record**: `mail.yourdomain.com` → SES inbound SMTP endpoint
+- **SPF TXT**: `v=spf1 include:amazonses.com ~all`
+- **DKIM CNAME records**: 3 CNAME records provided by SES domain verification
+- **DMARC TXT**: `v=DMARC1; p=quarantine; rua=mailto:...`
+
+Check SES verification status:
 
 ```bash
-# Start all services in the background
-go run ./services/auth                              &  # :8081
-go run ./services/inbox                             &  # :8082
-go run ./services/api                               &  # :8080
-go run ./services/email-pipeline/cmd/email-pipeline &
-go run ./services/event-dispatcher                  &
-go run ./services/webhook-service                   &
-go run ./services/scheduler                         &
-go run ./services/embedder                          &
-go run ./services/search                            &  # :8084
+aws ses get-identity-verification-attributes \
+  --profile <your-profile> --region us-east-1 \
+  --identities mail.yourdomain.com
 ```
 
-Or use the Makefile hot-reload target for the API:
+### 6. Bootstrap initial org
 
 ```bash
-make dev-api
-```
-
-### 4. Create an org and API key
-
-On first run, use the bootstrap tool to create your initial org and admin API key directly in the database:
-
-```bash
-# This is your master admin key — treat it like a root password.
-# It has full access to all scopes and is used to create all other
-# pods, inboxes, and API keys for this org. Store it securely.
-# Each run creates a new isolated org with its own admin key.
-# Slug must be unique — re-running with the same slug will fail.
-make bootstrap org="My Org" slug="my-org"
-
-# The key is printed once and never stored in plaintext — save it immediately.
+# DATABASE_URL must point at Aurora (via SSM tunnel or Lambda invoke)
+go run ./tools/bootstrap org="My Org" slug="my-org"
 export API_KEY=am_live_xxxx
 ```
 
-Verify your org and create additional scoped keys as needed:
+### 7. Verify the deployment
 
 ```bash
-# Get your org details
-curl http://${SMTP_HOSTNAME}:8080/v1/org \
-  -H "Authorization: Bearer ${API_KEY}"
+source loadenv.sh
+# REST_API_ENDPOINT is populated in .env.outputs by scripts/sync-env.sh
 
-# Create a scoped API key for an agent (optional)
-curl -X POST http://${SMTP_HOSTNAME}:8080/v1/keys \
-  -H "Authorization: Bearer ${API_KEY}" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"agent-key","scopes":["inbox:read","inbox:write","draft:write"]}'
+curl ${REST_API_ENDPOINT}/v1/org \
+  -H "Authorization: Bearer ${API_KEY}"
 ```
 
-Then create a pod and inbox:
+## Usage
+
+### Create a pod and inbox
 
 ```bash
 # Create a pod
-curl -X POST http://${SMTP_HOSTNAME}:8080/v1/pods \
+curl -X POST ${REST_API_ENDPOINT}/v1/pods \
   -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"name":"My Product","slug":"my-product"}'
 
 # Provision an inbox — with MAIL_DOMAIN set, just supply the username
-curl -X POST http://${SMTP_HOSTNAME}:8080/v1/inboxes \
+curl -X POST ${REST_API_ENDPOINT}/v1/inboxes \
   -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"pod_id":"<pod-id>","address":"agent"}'
-# → inbox.email will be "agent@yourdomain.com"
+# → inbox.email will be "agent@mail.yourdomain.com"
 ```
 
-### 5. Send and receive email
+### Send and receive email
 
 ```bash
 # Send outbound
-curl -X POST http://${SMTP_HOSTNAME}:8080/v1/inboxes/<inbox-id>/messages/send \
+curl -X POST ${REST_API_ENDPOINT}/v1/inboxes/<inbox-id>/messages/send \
   -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"to":[{"email":"test@example.com"}],"subject":"Hello","body_text":"Hi there"}'
 
 # List threads
-curl http://${SMTP_HOSTNAME}:8080/v1/inboxes/<inbox-id>/threads \
+curl ${REST_API_ENDPOINT}/v1/inboxes/<inbox-id>/threads \
   -H "Authorization: Bearer ${API_KEY}"
 
 # Get messages in a thread
-curl http://${SMTP_HOSTNAME}:8080/v1/inboxes/<inbox-id>/threads/<thread-id>/messages \
-  -H "Authorization: Bearer ${API_KEY}"
-
-# Get a specific message
-curl http://${SMTP_HOSTNAME}:8080/v1/inboxes/<inbox-id>/threads/<thread-id>/messages/<message-id> \
+curl ${REST_API_ENDPOINT}/v1/inboxes/<inbox-id>/threads/<thread-id>/messages \
   -H "Authorization: Bearer ${API_KEY}"
 ```
 
-### 6. Stop services
+### Custom domains
 
 ```bash
-# Stop all background Go services
-# (go run spawns a child binary in /tmp — kill both parent and child)
-pkill -f 'go run ./services' 2>/dev/null || true
-for svc in scheduler auth inbox api search embedder event-dispatcher webhook-service email-pipeline; do
-  pkill -f "exe/$svc" 2>/dev/null || true
-done
+# Add a custom domain for an org
+curl -X POST ${REST_API_ENDPOINT}/v1/domains \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"domain":"mail.mycustomer.com"}'
 
-# Stop all infrastructure containers
-make down
+# Get verification DNS records to add
+curl ${REST_API_ENDPOINT}/v1/domains/<domain-id> \
+  -H "Authorization: Bearer ${API_KEY}"
 
-# Stop containers and remove all volumes (destructive — wipes all data)
-make down-volumes
+# Trigger SES verification check after DNS records are added
+curl -X POST ${REST_API_ENDPOINT}/v1/domains/<domain-id>/verify \
+  -H "Authorization: Bearer ${API_KEY}"
 ```
 
-## Production Deployment
+## Environment Variables
 
-For a production self-hosted deployment you need:
+nGX uses a two-file environment model:
 
-1. **DNS records on your domain**
-   - A record: `mail.yourdomain.com` → your server IP
-   - MX record: `yourdomain.com` → `mail.yourdomain.com`
-   - SPF TXT: `v=spf1 a:mail.yourdomain.com ~all`
-   - DKIM TXT: `mail._domainkey.yourdomain.com` → publish public key matching your `DKIM_PRIVATE_KEY_PEM`
-   - DMARC TXT: `v=DMARC1; p=none; rua=mailto:admin@yourdomain.com`
-   - PTR record: your server IP → `mail.yourdomain.com` (set via your VPS/cloud provider)
+| File | Contents | Managed by |
+|------|----------|-----------|
+| `.env` | Pre-deploy inputs: `TF_VAR_*`, app settings | You (copy from `.env.example`) |
+| `.env.outputs` | Post-deploy outputs: endpoints, queue URLs, DB URL | `scripts/sync-env.sh` (auto-generated after `terraform apply`) |
 
-2. **Environment variables** (see `.env.example` for full reference)
-   ```
-   MAIL_DOMAIN=yourdomain.com
-   SMTP_HOSTNAME=mail.yourdomain.com
-   DKIM_DOMAIN=yourdomain.com
-   DKIM_SELECTOR=mail
-   DKIM_PRIVATE_KEY_PEM=<PEM-encoded RSA private key>
-   DATABASE_URL=postgres://...
-   ```
+Run `source loadenv.sh` to load both files. Re-run `scripts/sync-env.sh` after every `terraform apply`.
 
-3. **Port exposure**: open port 25 (or 2525) for inbound SMTP; expose port 8080 behind your load balancer for the REST API.
+See `.env.example` for the full variable reference.
+
+## Integration Tests
+
+Tests run against the live deployed AWS stack:
+
+```bash
+source loadenv.sh
+go test ./tests/integration/... -v -timeout 120s
+```
+
+> **SES sandbox**: Tests use `success@simulator.amazonses.com` for outbound mail so they work in SES sandbox mode.
 
 ## Project Structure
 
 ```
 nGX/
-├── api/                  # OpenAPI 3.1 specification
-├── configs/              # Postgres init, Kafka topics, Nginx
-├── docs/                 # This documentation
+├── lambdas/              # Lambda function source code
+│   ├── <function>/       #   One directory per Lambda
+│   └── shared/           #   Shared helpers (auth, response, DB, ...)
 ├── migrations/           # SQL migration pairs (up + down)
 ├── pkg/                  # Shared Go packages
 │   ├── auth/             #   API key generation, Claims, RBAC
 │   ├── config/           #   Env-based config loading
 │   ├── db/               #   pgxpool, transactions, RLS injection
-│   ├── events/           #   Event types and Kafka envelope
-│   ├── kafka/            #   Producer and consumer wrappers
-│   ├── middleware/        #   HTTP middleware (auth, rate limit, ...)
-│   ├── mime/             #   RFC 5322 MIME parser
 │   ├── models/           #   Domain structs
-│   ├── redis/            #   Client + key helpers
-│   ├── s3/               #   S3/MinIO client
+│   ├── s3/               #   S3 client
 │   └── telemetry/        #   slog + OpenTelemetry setup
-├── services/
-│   ├── api/              # REST + WebSocket gateway
-│   ├── auth/             # API key management
-│   ├── email-pipeline/   # SMTP inbound + outbound
-│   ├── event-dispatcher/ # Event fan-out
-│   ├── inbox/            # Core inbox business logic
-│   ├── scheduler/        # Background jobs
-│   ├── search/           # Full-text search
-│   └── webhook-service/  # Webhook HTTP delivery
-└── tools/
-    └── migrate/          # Migration runner CLI
+├── scripts/
+│   └── sync-env.sh       # Generate .env.outputs from terraform + Secrets Manager
+├── terraform/            # AWS infrastructure (IaC)
+│   ├── main.tf           #   Core resources (VPC, Aurora, SES, ...)
+│   ├── lambdas.tf        #   Lambda function definitions
+│   ├── api_gateway.tf    #   REST + WebSocket API GW
+│   ├── sqs.tf            #   SQS queues
+│   ├── iam.tf            #   Lambda execution role + policies
+│   └── outputs.tf        #   Exported values
+├── tests/
+│   └── integration/      # Integration tests (run against deployed AWS)
+├── tools/
+│   ├── bootstrap/        # Org + API key bootstrapper
+│   └── migrate/          # Migration runner CLI
+├── .env.example          # Environment variable reference
+├── loadenv.sh            # Sources .env + .env.outputs
+└── scripts/sync-env.sh   # Generates .env.outputs from terraform outputs
 ```
-
-## Development
-
-Common make targets:
-
-| Target | Description |
-|--------|-------------|
-| `make setup` | Bootstrap local dev environment (tools + infra + migrations) |
-| `make up` | Start all Docker infrastructure |
-| `make down` | Stop infrastructure |
-| `make down-volumes` | Stop infrastructure and remove volumes (destructive) |
-| `make migrate-up` | Apply pending migrations |
-| `make migrate-down` | Rollback one migration |
-| `make migrate-create name=X` | Create a new migration file pair |
-| `make migrate-reset` | Rollback all migrations (destructive) |
-| `make build` | Build all service binaries into bin/ |
-| `make test` | Run all tests with race detector |
-| `make test-coverage` | Run tests and generate HTML coverage report |
-| `make lint` | Run golangci-lint |
-| `make fmt` | Format all Go source files |
-| `make tidy` | Sync go.work and tidy all modules |
-| `make dev-api` | Run API service with hot-reload (air) |
-
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| [Architecture](docs/architecture.md) | System design, data flows, design decisions |
-| [Data Model](docs/data-model.md) | Database schema, RLS, pagination |
-| [Shared Packages](docs/shared-packages.md) | pkg/ reference |
-| [Events](docs/events.md) | Kafka topics, event types, webhooks/WebSocket |
-| [Development](docs/development.md) | Local dev guide, env vars |
-| [Services](docs/services/) | Per-service deep dives |
 
 ## Built With
 
-**Infrastructure**
+**AWS Services**
 
-| Component | Project |
-|-----------|---------|
-| Relational database + RLS + vector search | [PostgreSQL](https://www.postgresql.org) + [pgvector](https://github.com/pgvector/pgvector) |
-| Message streaming | [Apache Kafka](https://kafka.apache.org) (Confluent Platform) |
-| Cache + pub/sub | [Redis](https://redis.io) |
-| Object storage (S3-compatible) | [MinIO](https://min.io) |
-| Local SMTP sink + web UI | [MailHog](https://github.com/mailhog/MailHog) |
-| Local embedding server | [Infinity](https://github.com/michaelfeil/infinity) (nomic-embed-text-v1.5) |
-| Reverse proxy | [Nginx](https://nginx.org) |
+| Service | Role |
+|---------|------|
+| [API Gateway](https://aws.amazon.com/api-gateway/) | REST + WebSocket entry point |
+| [Lambda](https://aws.amazon.com/lambda/) | All business logic (Go, arm64, provided.al2023) |
+| [SES v2](https://aws.amazon.com/ses/) | Inbound receipt + outbound delivery + DKIM |
+| [Aurora PostgreSQL Serverless v2](https://aws.amazon.com/rds/aurora/serverless/) | Primary data store with RLS |
+| [RDS Proxy](https://aws.amazon.com/rds/proxy/) | Connection pooling for Lambdas |
+| [SQS](https://aws.amazon.com/sqs/) | Async job queues (inbound, outbound, webhooks, WS, embedder) |
+| [S3](https://aws.amazon.com/s3/) | Email + attachment storage |
+| [Secrets Manager](https://aws.amazon.com/secrets-manager/) | DB credentials |
+| [SSM](https://aws.amazon.com/systems-manager/) | Bastion access for DB tunneling |
 
 **Go Libraries**
 
 | Library | Purpose |
 |---------|---------|
-| [go-chi/chi](https://github.com/go-chi/chi) | HTTP router |
-| [go-chi/cors](https://github.com/go-chi/cors) | CORS middleware |
-| [gorilla/websocket](https://github.com/gorilla/websocket) | WebSocket support |
+| [aws/aws-sdk-go-v2](https://github.com/aws/aws-sdk-go-v2) | AWS service clients |
 | [jackc/pgx](https://github.com/jackc/pgx) | PostgreSQL driver |
-| [redis/go-redis](https://github.com/redis/go-redis) | Redis client |
-| [segmentio/kafka-go](https://github.com/segmentio/kafka-go) | Kafka producer/consumer |
-| [emersion/go-smtp](https://github.com/emersion/go-smtp) | SMTP server library |
-| [emersion/go-msgauth](https://github.com/emersion/go-msgauth) | DKIM/SPF authentication |
-| [aws/aws-sdk-go-v2](https://github.com/aws/aws-sdk-go-v2) | S3/MinIO client |
 | [golang-migrate/migrate](https://github.com/golang-migrate/migrate) | Database migrations |
 | [oklog/ulid](https://github.com/oklog/ulid) | ULID generation |
 | [google/uuid](https://github.com/google/uuid) | UUID generation |
-| [go-playground/validator](https://github.com/go-playground/validator) | Request validation |
 | [go.opentelemetry.io/otel](https://opentelemetry.io) | Distributed tracing + metrics |
-| [blitiri.com.ar/go/spf](https://pkg.go.dev/blitiri.com.ar/go/spf) | SPF record validation |
-
-**Tooling**
-
-| Tool | Purpose |
-|------|---------|
-| [air](https://github.com/air-verse/air) | Hot-reload for local development |
-| [golangci-lint](https://golangci-lint.run) | Go linter |
 
 ---
 
