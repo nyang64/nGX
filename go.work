@@ -3,16 +3,7 @@ go 1.24
 use (
 	./lambdas
 	./pkg
-	./services/api
-	./services/auth
-	./services/domains
-	./services/email-pipeline
-	./services/embedder
-	./services/event-dispatcher
-	./services/inbox
-	./services/scheduler
-	./services/search
-	./services/webhook-service
+	./services
 	./tests/integration
 	./tools/bootstrap
 	./tools/migrate
