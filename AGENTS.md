@@ -1,5 +1,16 @@
 # Agent Instructions
 
+nGX is an AWS serverless email platform for AI agents. All business logic runs in Go Lambda functions (arm64, provided.al2023) behind API Gateway. Email inbound/outbound flows through Amazon SES. Storage is Aurora PostgreSQL (via RDS Proxy), S3, and SQS queues. There is no Kafka, Redis, or self-hosted SMTP.
+
+**Key paths:**
+- `lambdas/` — one directory per Lambda function; `lambdas/shared/` has auth, DB, and response helpers
+- `terraform/` — all AWS infrastructure as code
+- `migrations/` — SQL schema migrations (run via SSM tunnel to Aurora)
+- `scripts/sync-env.sh` — generates `.env.outputs` after `terraform apply`
+- `loadenv.sh` — sources both `.env` (pre-deploy) and `.env.outputs` (post-deploy)
+
+**Deploy cycle:** `make lambdas` → `terraform apply` → `scripts/sync-env.sh` → `source loadenv.sh`
+
 This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
 
 ## Quick Reference
