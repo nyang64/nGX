@@ -640,17 +640,85 @@ file, Terraform cannot track existing resources and a fresh apply will attempt
 to create duplicates (which will fail on name conflicts).
 
 **Recommendation:** Configure a remote backend (S3 + DynamoDB) before relying
-on this stack in production:
+on this stack in production.
+
+### Step 1 — Bootstrap the state bucket and lock table (one-time, manual)
+
+The S3 bucket and DynamoDB table must exist **before** `terraform init` runs
+with the remote backend configured. Terraform cannot create them for you
+(chicken-and-egg). Run these AWS CLI commands once using your paver profile:
+
+```bash
+export TF_PAVER_PROFILE=nyk-tf   # your paver profile name
+export TF_AWS_REGION=us-east-1   # your target region
+export TF_STATE_BUCKET=ngx-tf-state          # choose a globally unique name
+export TF_LOCK_TABLE=ngx-tf-state-lock
+
+# Create the S3 bucket (versioning is required so Terraform can roll back state)
+aws s3api create-bucket \
+  --profile $TF_PAVER_PROFILE \
+  --region $TF_AWS_REGION \
+  --bucket $TF_STATE_BUCKET \
+  $([ "$TF_AWS_REGION" != "us-east-1" ] && echo "--create-bucket-configuration LocationConstraint=$TF_AWS_REGION")
+
+aws s3api put-bucket-versioning \
+  --profile $TF_PAVER_PROFILE \
+  --region $TF_AWS_REGION \
+  --bucket $TF_STATE_BUCKET \
+  --versioning-configuration Status=Enabled
+
+aws s3api put-bucket-encryption \
+  --profile $TF_PAVER_PROFILE \
+  --region $TF_AWS_REGION \
+  --bucket $TF_STATE_BUCKET \
+  --server-side-encryption-configuration \
+    '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+
+# Block all public access to the state bucket
+aws s3api put-public-access-block \
+  --profile $TF_PAVER_PROFILE \
+  --region $TF_AWS_REGION \
+  --bucket $TF_STATE_BUCKET \
+  --public-access-block-configuration \
+    "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
+
+# Create the DynamoDB lock table (PAY_PER_REQUEST — no provisioned capacity needed)
+aws dynamodb create-table \
+  --profile $TF_PAVER_PROFILE \
+  --region $TF_AWS_REGION \
+  --table-name $TF_LOCK_TABLE \
+  --attribute-definitions AttributeName=LockID,AttributeType=S \
+  --key-schema AttributeName=LockID,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST
+```
+
+> **Note for `us-east-1`:** `create-bucket` must not include
+> `--create-bucket-configuration` in us-east-1 — that is why the command
+> above conditionally omits it.
+
+### Step 2 — Add the backend block to Terraform
 
 ```hcl
 # terraform/main.tf — add this block
 terraform {
   backend "s3" {
-    bucket         = "ngx-tf-state"
+    bucket         = "ngx-tf-state"       # must match TF_STATE_BUCKET above
     key            = "prod/terraform.tfstate"
-    region         = "<your-aws-region>"
-    dynamodb_table = "ngx-tf-state-lock"
+    region         = "us-east-1"          # must match TF_AWS_REGION above
+    dynamodb_table = "ngx-tf-state-lock"  # must match TF_LOCK_TABLE above
     encrypt        = true
   }
 }
 ```
+
+### Step 3 — Migrate existing local state (if upgrading an existing deployment)
+
+```bash
+# Re-initialise Terraform — it will detect the new backend and offer to copy
+# the existing local state into S3 automatically. Answer "yes" when prompted.
+terraform -chdir=terraform init
+```
+
+After migration the local `terraform.tfstate` file is no longer used. Keep
+the original as a backup until you have confirmed the remote state is intact,
+then delete it.
