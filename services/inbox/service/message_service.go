@@ -31,14 +31,14 @@ func generateMessageID() string {
 
 // SendMessageRequest is the input for sending a new message.
 type SendMessageRequest struct {
-	To        []models.EmailAddress
-	CC        []models.EmailAddress
-	BCC       []models.EmailAddress
-	Subject   string
-	BodyText  string
-	BodyHTML  string
-	ReplyToID *uuid.UUID // message ID to reply to
-	Metadata  map[string]any
+	To        []models.EmailAddress `json:"to"`
+	CC        []models.EmailAddress `json:"cc"`
+	BCC       []models.EmailAddress `json:"bcc"`
+	Subject   string                `json:"subject"`
+	BodyText  string                `json:"body_text"`
+	BodyHTML  string                `json:"body_html"`
+	ReplyToID *uuid.UUID            `json:"reply_to_id,omitempty"`
+	Metadata  map[string]any        `json:"metadata,omitempty"`
 }
 
 // OutboundJob is the payload published to the email outbound queue.

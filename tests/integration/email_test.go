@@ -36,9 +36,10 @@ func TestOutboundEmail(t *testing.T) {
 	inboxID := mustStr(t, body, "id")
 	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
 
-	// Send a message.
+	// Use the SES mailbox simulator — always succeeds even in sandbox mode.
+	// success@simulator.amazonses.com is a special address provided by AWS for testing.
 	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
-		"to":        []map[string]any{{"email": "outbound-test@example.com"}},
+		"to":        []map[string]any{{"email": "success@simulator.amazonses.com"}},
 		"subject":   "Outbound test " + uniqueName("subj"),
 		"body_text": "Integration test outbound message",
 	})
@@ -112,7 +113,7 @@ func TestInboundEmail(t *testing.T) {
 	}
 
 	subject := "Inbound test " + uniqueName("subj")
-	rawEML := buildTestEML("sender@example.com", inboxEmail, subject, "Integration test inbound body")
+	rawEML := buildTestEML("success@simulator.amazonses.com", inboxEmail, subject, "Integration test inbound body")
 
 	// Upload raw .eml to S3 under inbound/raw/.
 	ctx := context.Background()

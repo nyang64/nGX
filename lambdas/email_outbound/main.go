@@ -197,10 +197,11 @@ func processRecord(ctx context.Context, record awsevents.SQSMessage) error {
 	})
 }
 
-// buildMIME assembles a minimal RFC 5322 multipart/alternative message.
+// buildMIME assembles a minimal RFC 5322 message.
+// Uses multipart/alternative when both text and HTML are present;
+// falls back to text/plain for text-only or empty bodies.
 func buildMIME(msg *models.Message, toAddrs, ccAddrs []string, textBody, htmlBody string) []byte {
 	var buf bytes.Buffer
-	boundary := uuid.New().String()
 
 	fromAddr := msg.From.Email
 	if msg.From.Name != "" {
@@ -230,24 +231,39 @@ func buildMIME(msg *models.Message, toAddrs, ccAddrs []string, textBody, htmlBod
 	if msg.ReplyTo != "" {
 		buf.WriteString(fmt.Sprintf("Reply-To: %s\r\n", msg.ReplyTo))
 	}
-	buf.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=%q\r\n", boundary))
-	buf.WriteString("\r\n")
 
-	if textBody != "" {
+	if textBody != "" && htmlBody != "" {
+		// Both parts: use multipart/alternative.
+		boundary := uuid.New().String()
+		buf.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=%q\r\n", boundary))
+		buf.WriteString("\r\n")
+
 		buf.WriteString(fmt.Sprintf("--%s\r\n", boundary))
 		buf.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
 		buf.WriteString("Content-Transfer-Encoding: quoted-printable\r\n\r\n")
 		buf.WriteString(textBody)
 		buf.WriteString("\r\n")
-	}
-	if htmlBody != "" {
+
 		buf.WriteString(fmt.Sprintf("--%s\r\n", boundary))
 		buf.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
 		buf.WriteString("Content-Transfer-Encoding: quoted-printable\r\n\r\n")
 		buf.WriteString(htmlBody)
 		buf.WriteString("\r\n")
+
+		buf.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
+	} else if htmlBody != "" {
+		buf.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
+		buf.WriteString("Content-Transfer-Encoding: quoted-printable\r\n\r\n")
+		buf.WriteString(htmlBody)
+		buf.WriteString("\r\n")
+	} else {
+		// text-only or empty — always safe to send as text/plain.
+		buf.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
+		buf.WriteString("Content-Transfer-Encoding: quoted-printable\r\n\r\n")
+		buf.WriteString(textBody)
+		buf.WriteString("\r\n")
 	}
-	buf.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
+
 	return buf.Bytes()
 }
 

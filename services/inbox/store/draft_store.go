@@ -29,6 +29,7 @@ type DraftPatch struct {
 	Bcc          []models.EmailAddress
 	TextBody     *string
 	HtmlBody     *string
+	ScheduledAt  *time.Time
 	ReviewStatus *string
 	ReviewNote   *string
 	ReviewedAt   *time.Time
@@ -211,6 +212,11 @@ func (s *PostgresDraftStore) Update(ctx context.Context, tx pgx.Tx, orgID, draft
 	if patch.HtmlBody != nil {
 		setClauses = append(setClauses, fmt.Sprintf("body_html = $%d", argIdx))
 		args = append(args, *patch.HtmlBody)
+		argIdx++
+	}
+	if patch.ScheduledAt != nil {
+		setClauses = append(setClauses, fmt.Sprintf("scheduled_at = $%d", argIdx))
+		args = append(args, *patch.ScheduledAt)
 		argIdx++
 	}
 	if patch.ReviewStatus != nil {
