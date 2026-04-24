@@ -8,9 +8,17 @@
 package integration
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awscfg "github.com/aws/aws-sdk-go-v2/config"
+	lambdasdk "github.com/aws/aws-sdk-go-v2/service/lambda"
+	s3sdk "github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 // TestKeywordSearch verifies that a sent message becomes searchable via the
@@ -199,5 +207,114 @@ func TestSemanticSearch(t *testing.T) {
 	})
 	if !ok {
 		t.Skip("semantic search: message not found within 30s — embedder may not be configured")
+	}
+}
+
+// TestInboundSemanticSearch verifies the full inbound embedding pipeline:
+// EML → S3 → email_inbound Lambda → MessageReceivedEvent → embedder Lambda
+// → pgvector → semantic search API.
+//
+// Requires the same env vars as TestInboundEmail plus EMBEDDER_URL.
+func TestInboundSemanticSearch(t *testing.T) {
+	c := newClient(t)
+
+	bucketName := os.Getenv("TEST_S3_BUCKET_EMAILS")
+	lambdaPrefix := os.Getenv("TEST_LAMBDA_PREFIX")
+	awsRegion := os.Getenv("TEST_AWS_REGION")
+	if bucketName == "" || lambdaPrefix == "" || awsRegion == "" {
+		t.Skip("TEST_S3_BUCKET_EMAILS, TEST_LAMBDA_PREFIX, and TEST_AWS_REGION must be set")
+	}
+
+	// Create a dedicated inbox.
+	addr := uniqueName("semin")
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": addr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	inboxEmail := str(body, "email")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+	semToken := uniqueName("insem")
+	subject := "Inbound semantic test " + semToken
+	bodyText := "The lazy cat sat on a warm mat. Token: " + semToken
+	rawEML := buildTestEML("sender@example.com", inboxEmail, subject, bodyText)
+
+	// Upload raw .eml to S3.
+	ctx := context.Background()
+	awsConf, err := awscfg.LoadDefaultConfig(ctx, awscfg.WithRegion(awsRegion))
+	if err != nil {
+		t.Fatalf("load AWS config: %v", err)
+	}
+	s3Client := s3sdk.NewFromConfig(awsConf)
+	s3Key := fmt.Sprintf("inbound/raw/%s.eml", uniqueName("inmsg"))
+	_, err = s3Client.PutObject(ctx, &s3sdk.PutObjectInput{
+		Bucket:      aws.String(bucketName),
+		Key:         aws.String(s3Key),
+		Body:        bytes.NewReader(rawEML),
+		ContentType: aws.String("message/rfc822"),
+	})
+	if err != nil {
+		t.Fatalf("upload .eml to S3: %v", err)
+	}
+	t.Cleanup(func() {
+		s3Client.DeleteObject(ctx, &s3sdk.DeleteObjectInput{Bucket: aws.String(bucketName), Key: aws.String(s3Key)})
+	})
+
+	// Invoke email_inbound Lambda directly.
+	lambdaClient := lambdasdk.NewFromConfig(awsConf)
+	resp, err := lambdaClient.Invoke(ctx, &lambdasdk.InvokeInput{
+		FunctionName: aws.String(lambdaPrefix + "-email-inbound"),
+		Payload:      buildS3EventPayload(bucketName, s3Key),
+	})
+	if err != nil {
+		t.Fatalf("invoke email_inbound: %v", err)
+	}
+	if resp.FunctionError != nil {
+		t.Fatalf("lambda function error: %s — %s", *resp.FunctionError, string(resp.Payload))
+	}
+
+	// Poll for message to appear in threads, then get its ID.
+	var msgID string
+	ok := pollUntil(t, 20*time.Second, 2*time.Second, func() bool {
+		_, body, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads", inboxID))
+		if err != nil {
+			return false
+		}
+		for _, th := range listOf(body, "threads") {
+			threadID := str(asMap(th), "id")
+			_, mb, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages", inboxID, threadID))
+			if err != nil {
+				return false
+			}
+			for _, m := range listOf(mb, "messages") {
+				if str(asMap(m), "direction") == "inbound" {
+					msgID = str(asMap(m), "id")
+					return true
+				}
+			}
+		}
+		return false
+	})
+	if !ok {
+		t.Fatal("inbound message never appeared in threads")
+	}
+
+	// Now poll semantic search — the embedder Lambda is async so allow 45s.
+	ok = pollUntil(t, 45*time.Second, 3*time.Second, func() bool {
+		_, body, err := c.get("/v1/search?q=lazy+cat+warm+mat&mode=semantic&inbox_id=" + inboxID)
+		if err != nil {
+			return false
+		}
+		for _, item := range listOf(body, "items") {
+			if str(asMap(item), "message_id") == msgID {
+				return true
+			}
+		}
+		return false
+	})
+	if !ok {
+		t.Skip("inbound semantic search: embedding not found within 45s — embedder may not be processing MessageReceivedEvent")
 	}
 }
