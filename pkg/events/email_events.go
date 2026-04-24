@@ -39,6 +39,10 @@ type MessageSentData struct {
 	ThreadID  uuid.UUID `json:"thread_id"`
 	To        []string  `json:"to"`
 	Subject   string    `json:"subject"`
+	// BodyText is the plain-text body of the message, included when the event
+	// is published at send time (before SES delivery) so the embedder can
+	// index outbound messages without requiring a separate S3 object.
+	BodyText string `json:"body_text,omitempty"`
 }
 
 // MessageBouncedEvent is published when a delivery attempt results in a bounce.

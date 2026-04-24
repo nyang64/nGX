@@ -68,6 +68,7 @@ type MessageService struct {
 	threadStore      store.ThreadStore
 	inboxStore       store.InboxStore
 	outboundProducer events.OutboundPublisher
+	eventPublisher   events.EventPublisher
 }
 
 // NewMessageService creates a new MessageService.
@@ -77,6 +78,7 @@ func NewMessageService(
 	threadStore store.ThreadStore,
 	inboxStore store.InboxStore,
 	outboundProducer events.OutboundPublisher,
+	eventPublisher events.EventPublisher,
 ) *MessageService {
 	return &MessageService{
 		pool:             pool,
@@ -84,6 +86,7 @@ func NewMessageService(
 		threadStore:      threadStore,
 		inboxStore:       inboxStore,
 		outboundProducer: outboundProducer,
+		eventPublisher:   eventPublisher,
 	}
 }
 
@@ -256,6 +259,26 @@ func (s *MessageService) Send(ctx context.Context, claims *auth.Claims, inboxID 
 	if err != nil {
 		return nil, fmt.Errorf("send message: %w", err)
 	}
+
+	// Publish MessageSentEvent immediately after DB insert so the embedder can
+	// index outbound messages without waiting for SES delivery confirmation.
+	// BodyText is included inline — no S3 object needed for outbound messages.
+	to := make([]string, len(req.To))
+	for i, a := range req.To {
+		to[i] = a.Email
+	}
+	_ = s.eventPublisher.PublishEvent(ctx, &events.MessageSentEvent{
+		BaseEvent: events.NewBase(events.EventMessageSent, msg.OrgID),
+		Data: events.MessageSentData{
+			MessageID: msg.ID.String(),
+			InboxID:   msg.InboxID,
+			ThreadID:  msg.ThreadID,
+			To:        to,
+			Subject:   msg.Subject,
+			BodyText:  req.BodyText,
+		},
+	})
+
 	return msg, nil
 }
 

@@ -87,11 +87,13 @@ func processRecord(ctx context.Context, record events.SQSMessage) error {
 	}
 
 	var msgIDStr string
+	var inlineBody string // non-empty for outbound messages (body carried in event)
 	switch e := evt.(type) {
 	case *domainevents.MessageReceivedEvent:
 		msgIDStr = e.Data.MessageID
 	case *domainevents.MessageSentEvent:
 		msgIDStr = e.Data.MessageID
+		inlineBody = e.Data.BodyText
 	default:
 		return nil
 	}
@@ -102,23 +104,27 @@ func processRecord(ctx context.Context, record events.SQSMessage) error {
 		return nil
 	}
 
-	textKey, err := store.GetTextKey(ctx, msgID)
-	if err != nil {
-		slog.Error("embedder: get text key", "message_id", msgID, "error", err)
-		return nil
+	var text string
+	if inlineBody != "" {
+		// Outbound message: body text carried inline in the event, no S3 fetch needed.
+		text = strings.TrimSpace(inlineBody)
+	} else {
+		textKey, err := store.GetTextKey(ctx, msgID)
+		if err != nil {
+			slog.Error("embedder: get text key", "message_id", msgID, "error", err)
+			return nil
+		}
+		if textKey == "" {
+			slog.Debug("embedder: no text body, skipping", "message_id", msgID)
+			return nil
+		}
+		raw, err := s3Client.Download(ctx, textKey)
+		if err != nil {
+			slog.Error("embedder: download body text", "message_id", msgID, "s3_key", textKey, "error", err)
+			return nil
+		}
+		text = strings.TrimSpace(string(raw))
 	}
-	if textKey == "" {
-		slog.Debug("embedder: no text body, skipping", "message_id", msgID)
-		return nil
-	}
-
-	raw, err := s3Client.Download(ctx, textKey)
-	if err != nil {
-		slog.Error("embedder: download body text", "message_id", msgID, "s3_key", textKey, "error", err)
-		return nil
-	}
-
-	text := strings.TrimSpace(string(raw))
 	if text == "" {
 		return nil
 	}

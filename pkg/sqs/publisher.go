@@ -58,7 +58,7 @@ func (p *Publisher) PublishEvent(ctx context.Context, e events.Event) error {
 	bodyStr := string(body)
 
 	queues := []string{p.webhookDeliveryURL, p.wsDispatchURL}
-	if e.GetBase().Type == events.EventMessageReceived {
+	if t := e.GetBase().Type; t == events.EventMessageReceived || t == events.EventMessageSent {
 		queues = append(queues, p.embedderURL)
 	}
 

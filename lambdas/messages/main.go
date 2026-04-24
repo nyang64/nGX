@@ -43,7 +43,7 @@ func init() {
 		inboxstore.NewPostgresMessageStore(pool),
 		inboxstore.NewPostgresThreadStore(pool),
 		inboxstore.NewPostgresInboxStore(pool),
-		pub)
+		pub, pub)
 }
 
 func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
