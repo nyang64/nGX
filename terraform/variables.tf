@@ -83,7 +83,20 @@ variable "embedder_url" {
 variable "embedder_model" {
   description = "Embedding model name"
   type        = string
-  default     = "nomic-embed-text-v1.5"
+  default     = "@cf/baai/bge-base-en-v1.5"
+}
+
+variable "embedder_api_key" {
+  description = "Bearer token for the embedding service (e.g. Cloudflare API token)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "embedder_dims" {
+  description = "Embedding dimensions to keep (0 = use all dims returned by model)"
+  type        = number
+  default     = 0
 }
 
 # ── Tags ───────────────────────────────────────────────────────────────────────

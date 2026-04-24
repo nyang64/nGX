@@ -11,6 +11,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -50,7 +51,14 @@ func init() {
 
 	embedderURL := os.Getenv("EMBEDDER_URL")
 	embedderModel := os.Getenv("EMBEDDER_MODEL")
-	emb = embedderpkg.New(embedderURL, embedderModel, 768)
+	embedderAPIKey := os.Getenv("EMBEDDER_API_KEY")
+	embedderDims := 0
+	if s := os.Getenv("EMBEDDER_DIMS"); s != "" {
+		if d, err := strconv.Atoi(s); err == nil && d > 0 {
+			embedderDims = d
+		}
+	}
+	emb = embedderpkg.New(embedderURL, embedderModel, embedderAPIKey, embedderDims)
 }
 
 func handler(ctx context.Context, sqsEvent events.SQSEvent) error {

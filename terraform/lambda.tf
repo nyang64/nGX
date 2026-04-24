@@ -351,8 +351,10 @@ resource "aws_lambda_function" "search" {
 
   environment {
     variables = merge(local.db_env, {
-      EMBEDDER_URL   = var.embedder_url
-      EMBEDDER_MODEL = var.embedder_model
+      EMBEDDER_URL     = var.embedder_url
+      EMBEDDER_MODEL   = var.embedder_model
+      EMBEDDER_API_KEY = var.embedder_api_key
+      EMBEDDER_DIMS    = var.embedder_dims
     })
   }
 
@@ -552,6 +554,8 @@ resource "aws_lambda_function" "embedder" {
     variables = merge(local.db_env, {
       EMBEDDER_URL          = var.embedder_url
       EMBEDDER_MODEL        = var.embedder_model
+      EMBEDDER_API_KEY      = var.embedder_api_key
+      EMBEDDER_DIMS         = var.embedder_dims
       S3_BUCKET_EMAILS      = aws_s3_bucket.emails.id
     })
   }

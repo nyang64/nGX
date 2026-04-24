@@ -33,7 +33,13 @@ var (
 func init() {
 	pool = shared.InitDB()
 	if u := os.Getenv("EMBEDDER_URL"); u != "" {
-		embeddr = embedder.New(u, os.Getenv("EMBEDDER_MODEL"), 768)
+		dims := 0
+		if s := os.Getenv("EMBEDDER_DIMS"); s != "" {
+			if d, err := strconv.Atoi(s); err == nil && d > 0 {
+				dims = d
+			}
+		}
+		embeddr = embedder.New(u, os.Getenv("EMBEDDER_MODEL"), os.Getenv("EMBEDDER_API_KEY"), dims)
 	}
 }
 

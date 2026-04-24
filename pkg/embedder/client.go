@@ -18,23 +18,27 @@ import (
 	"time"
 )
 
-// Client calls an OpenAI-compatible embedding server such as Infinity or Ollama.
+// Client calls an OpenAI-compatible embedding server such as Infinity, Ollama,
+// or Cloudflare Workers AI.
 type Client struct {
 	baseURL string
 	model   string
+	apiKey  string
 	dims    int
 	http    *http.Client
 }
 
 // New creates a Client.
 //
-//   - baseURL: e.g. "http://infinity:7997" or "http://ollama:11434"
-//   - model:   e.g. "nomic-embed-text-v1.5"
-//   - dims:    dimensions to keep after MRL truncation (0 = keep all returned dims)
-func New(baseURL, model string, dims int) *Client {
+//   - baseURL: e.g. "http://infinity:7997" or Cloudflare AI base URL
+//   - model:   e.g. "@cf/baai/bge-base-en-v1.5"
+//   - apiKey:  Bearer token (empty = no Authorization header)
+//   - dims:    dimensions to keep after truncation (0 = keep all returned dims)
+func New(baseURL, model, apiKey string, dims int) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		model:   model,
+		apiKey:  apiKey,
 		dims:    dims,
 		http:    &http.Client{Timeout: 30 * time.Second},
 	}
@@ -66,6 +70,9 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
