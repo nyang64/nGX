@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"agentmail/lambdas/shared"
+	s3pkg "agentmail/pkg/s3"
 	sqspkg "agentmail/pkg/sqs"
 	inboxsvc "agentmail/services/inbox/service"
 	inboxstore "agentmail/services/inbox/store"
@@ -39,12 +40,19 @@ func init() {
 		os.Exit(1)
 	}
 	pub := sqspkg.NewPublisher(sqssdk.NewFromConfig(awsConf))
+
+	attachmentsS3, err := s3pkg.NewFromAWS(ctx, os.Getenv("S3_BUCKET_ATTACHMENTS"))
+	if err != nil {
+		slog.Error("drafts: init attachments S3 client", "error", err)
+		os.Exit(1)
+	}
+
 	draftSv = inboxsvc.NewDraftService(pool,
 		inboxstore.NewPostgresDraftStore(pool),
 		inboxstore.NewPostgresMessageStore(pool),
 		inboxstore.NewPostgresThreadStore(pool),
 		inboxstore.NewPostgresInboxStore(pool),
-		pub, pub)
+		pub, pub, attachmentsS3)
 }
 
 func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {

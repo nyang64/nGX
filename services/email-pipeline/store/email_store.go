@@ -226,14 +226,15 @@ func (s *EmailStore) CreateMessage(ctx context.Context, tx pgx.Tx, msg *models.M
 func (s *EmailStore) CreateAttachment(ctx context.Context, tx pgx.Tx, att *models.Attachment) error {
 	const query = `
 		INSERT INTO attachments
-		    (id, org_id, message_id, filename, content_type,
+		    (id, org_id, message_id, draft_id, filename, content_type,
 		     size_bytes, s3_key, content_id, is_inline, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
 
 	_, err := tx.Exec(ctx, query,
 		att.ID,
 		att.OrgID,
 		att.MessageID,
+		att.DraftID,
 		att.Filename,
 		att.ContentType,
 		att.SizeBytes,
@@ -397,7 +398,7 @@ func (s *EmailStore) UpdateMessageStatus(ctx context.Context, tx pgx.Tx, message
 // message record was loaded under RLS; a direct pool query is safe here).
 func (s *EmailStore) GetAttachmentsByMessageID(ctx context.Context, orgID uuid.UUID, messageID uuid.UUID) ([]*models.Attachment, error) {
 	const query = `
-		SELECT id, org_id, message_id, filename, content_type,
+		SELECT id, org_id, message_id, draft_id, filename, content_type,
 		       size_bytes, s3_key, content_id, is_inline, created_at
 		FROM attachments
 		WHERE org_id = $1 AND message_id = $2
@@ -413,7 +414,7 @@ func (s *EmailStore) GetAttachmentsByMessageID(ctx context.Context, orgID uuid.U
 	for rows.Next() {
 		a := &models.Attachment{}
 		if err := rows.Scan(
-			&a.ID, &a.OrgID, &a.MessageID,
+			&a.ID, &a.OrgID, &a.MessageID, &a.DraftID,
 			&a.Filename, &a.ContentType,
 			&a.SizeBytes, &a.S3Key,
 			&a.ContentID, &a.Inline,

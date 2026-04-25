@@ -9,6 +9,7 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	dbpkg "agentmail/pkg/db"
 	"agentmail/pkg/events"
 	"agentmail/pkg/models"
+	s3pkg "agentmail/pkg/s3"
 	"agentmail/services/inbox/store"
 
 	"github.com/google/uuid"
@@ -41,6 +43,7 @@ type CreateDraftRequest struct {
 	InReplyTo   string                `json:"in_reply_to,omitempty"`
 	ScheduledAt *time.Time            `json:"scheduled_at,omitempty"`
 	Metadata    map[string]any        `json:"metadata,omitempty"`
+	Attachments []AttachmentRequest   `json:"attachments,omitempty"`
 }
 
 // UpdateDraftRequest is the input for updating a draft.
@@ -53,6 +56,8 @@ type UpdateDraftRequest struct {
 	HtmlBody    *string               `json:"body_html,omitempty"`
 	ScheduledAt *time.Time            `json:"scheduled_at,omitempty"`
 	Metadata    map[string]any        `json:"metadata,omitempty"`
+	// Attachments replaces the draft's existing attachments when non-nil.
+	Attachments []AttachmentRequest `json:"attachments,omitempty"`
 }
 
 // DraftService handles draft business logic.
@@ -64,6 +69,7 @@ type DraftService struct {
 	inboxStore       store.InboxStore
 	eventProducer    events.EventPublisher
 	outboundProducer events.OutboundPublisher
+	attachmentsS3    *s3pkg.Client
 }
 
 // NewDraftService creates a new DraftService.
@@ -75,6 +81,7 @@ func NewDraftService(
 	inboxStore store.InboxStore,
 	eventProducer events.EventPublisher,
 	outboundProducer events.OutboundPublisher,
+	attachmentsS3 *s3pkg.Client,
 ) *DraftService {
 	return &DraftService{
 		pool:             pool,
@@ -84,14 +91,69 @@ func NewDraftService(
 		inboxStore:       inboxStore,
 		eventProducer:    eventProducer,
 		outboundProducer: outboundProducer,
+		attachmentsS3:    attachmentsS3,
 	}
+}
+
+// uploadAttachments decodes and uploads inline attachment requests to S3.
+// Returns (s3Key, filename, contentType, sizeBytes) tuples.
+func (s *DraftService) uploadAttachments(ctx context.Context, orgID uuid.UUID, parentID uuid.UUID, prefix string, atts []AttachmentRequest) ([]struct {
+	s3Key, filename, contentType string
+	sizeBytes                    int64
+}, error) {
+	type upload struct {
+		s3Key, filename, contentType string
+		sizeBytes                    int64
+	}
+	var uploads []upload
+	for _, a := range atts {
+		data, err := base64.StdEncoding.DecodeString(a.Content)
+		if err != nil {
+			return nil, fmt.Errorf("decode attachment %q: %w", a.Filename, err)
+		}
+		ct := a.ContentType
+		if ct == "" {
+			ct = "application/octet-stream"
+		}
+		key := fmt.Sprintf("%s/%s/%s/%s", orgID, prefix, parentID, a.Filename)
+		if s.attachmentsS3 != nil {
+			if err := s.attachmentsS3.Upload(ctx, key, data, ct); err != nil {
+				return nil, fmt.Errorf("upload attachment %q: %w", a.Filename, err)
+			}
+		}
+		uploads = append(uploads, upload{
+			s3Key:       key,
+			filename:    a.Filename,
+			contentType: ct,
+			sizeBytes:   int64(len(data)),
+		})
+	}
+	result := make([]struct {
+		s3Key, filename, contentType string
+		sizeBytes                    int64
+	}, len(uploads))
+	for i, u := range uploads {
+		result[i].s3Key = u.s3Key
+		result[i].filename = u.filename
+		result[i].contentType = u.contentType
+		result[i].sizeBytes = u.sizeBytes
+	}
+	return result, nil
 }
 
 // Create stores a new draft.
 func (s *DraftService) Create(ctx context.Context, claims *auth.Claims, req CreateDraftRequest) (*models.Draft, error) {
 	now := time.Now().UTC()
+	draftID := uuid.New()
+
+	// Upload attachments before opening the DB transaction.
+	attUploads, err := s.uploadAttachments(ctx, claims.OrgID, draftID, "drafts", req.Attachments)
+	if err != nil {
+		return nil, err
+	}
+
 	draft := &models.Draft{
-		ID:           uuid.New(),
+		ID:           draftID,
 		OrgID:        claims.OrgID,
 		InboxID:      req.InboxID,
 		ThreadID:     req.ThreadID,
@@ -112,8 +174,26 @@ func (s *DraftService) Create(ctx context.Context, claims *auth.Claims, req Crea
 		draft.Metadata = map[string]any{}
 	}
 
-	err := dbpkg.WithOrgTx(ctx, s.pool, claims.OrgID, func(tx pgx.Tx) error {
-		return s.draftStore.Create(ctx, tx, draft)
+	err = dbpkg.WithOrgTx(ctx, s.pool, claims.OrgID, func(tx pgx.Tx) error {
+		if err := s.draftStore.Create(ctx, tx, draft); err != nil {
+			return err
+		}
+		for _, a := range attUploads {
+			att := &models.Attachment{
+				ID:          uuid.New(),
+				OrgID:       claims.OrgID,
+				DraftID:     &draftID,
+				Filename:    a.filename,
+				ContentType: a.contentType,
+				SizeBytes:   a.sizeBytes,
+				S3Key:       a.s3Key,
+				CreatedAt:   now,
+			}
+			if err := s.messageStore.CreateDraftAttachment(ctx, tx, att); err != nil {
+				return fmt.Errorf("create draft attachment: %w", err)
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create draft: %w", err)
@@ -167,6 +247,21 @@ func (s *DraftService) List(ctx context.Context, claims *auth.Claims, inboxID uu
 
 // Update modifies draft content.
 func (s *DraftService) Update(ctx context.Context, claims *auth.Claims, draftID uuid.UUID, req UpdateDraftRequest) (*models.Draft, error) {
+	now := time.Now().UTC()
+
+	// If attachments are being replaced, upload new ones before the transaction.
+	var attUploads []struct {
+		s3Key, filename, contentType string
+		sizeBytes                    int64
+	}
+	if req.Attachments != nil {
+		var err error
+		attUploads, err = s.uploadAttachments(ctx, claims.OrgID, draftID, "drafts", req.Attachments)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	var draft *models.Draft
 	err := dbpkg.WithOrgTx(ctx, s.pool, claims.OrgID, func(tx pgx.Tx) error {
 		existing, err := s.draftStore.GetByID(ctx, tx, claims.OrgID, draftID)
@@ -186,7 +281,31 @@ func (s *DraftService) Update(ctx context.Context, claims *auth.Claims, draftID 
 			ScheduledAt: req.ScheduledAt,
 			Metadata:    req.Metadata,
 		})
-		return err
+		if err != nil {
+			return err
+		}
+		// Replace attachments if provided.
+		if req.Attachments != nil {
+			if err := s.messageStore.DeleteDraftAttachments(ctx, tx, claims.OrgID, draftID); err != nil {
+				return err
+			}
+			for _, a := range attUploads {
+				att := &models.Attachment{
+					ID:          uuid.New(),
+					OrgID:       claims.OrgID,
+					DraftID:     &draftID,
+					Filename:    a.filename,
+					ContentType: a.contentType,
+					SizeBytes:   a.sizeBytes,
+					S3Key:       a.s3Key,
+					CreatedAt:   now,
+				}
+				if err := s.messageStore.CreateDraftAttachment(ctx, tx, att); err != nil {
+					return fmt.Errorf("create draft attachment: %w", err)
+				}
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("update draft: %w", err)
@@ -280,33 +399,48 @@ func (s *DraftService) Approve(ctx context.Context, claims *auth.Claims, draftID
 			metadata = map[string]any{}
 		}
 
+		// Count draft attachments so we can set HasAttachments on the message.
+		draftAtts, err := s.messageStore.ListDraftAttachments(ctx, tx, claims.OrgID, draftID)
+		if err != nil {
+			return fmt.Errorf("list draft attachments: %w", err)
+		}
+
 		// Create outbound message.
+		msgID := uuid.New()
 		msg := &models.Message{
-			ID:         uuid.New(),
-			OrgID:      claims.OrgID,
-			InboxID:    existing.InboxID,
-			ThreadID:   thread.ID,
-			MessageID:  generateMessageID(),
-			Direction:  models.DirectionOutbound,
-			Status:     models.MessageStatusSending,
+			ID:             msgID,
+			OrgID:          claims.OrgID,
+			InboxID:        existing.InboxID,
+			ThreadID:       thread.ID,
+			MessageID:      generateMessageID(),
+			Direction:      models.DirectionOutbound,
+			Status:         models.MessageStatusSending,
 			From: models.EmailAddress{
 				Email: inbox.Email,
 				Name:  inbox.DisplayName,
 			},
-			To:         existing.To,
-			Cc:         existing.Cc,
-			Bcc:        existing.Bcc,
-			Subject:    existing.Subject,
-			InReplyTo:  existing.InReplyTo,
-			References: references,
-			Metadata:   metadata,
-			Snippet:    snippetFrom(existing.TextBody),
-			SentAt:     &now,
-			CreatedAt:  now,
-			UpdatedAt:  now,
+			To:             existing.To,
+			Cc:             existing.Cc,
+			Bcc:            existing.Bcc,
+			Subject:        existing.Subject,
+			InReplyTo:      existing.InReplyTo,
+			References:     references,
+			Metadata:       metadata,
+			Snippet:        snippetFrom(existing.TextBody),
+			HasAttachments: len(draftAtts) > 0,
+			SentAt:         &now,
+			CreatedAt:      now,
+			UpdatedAt:      now,
 		}
 		if err := s.messageStore.Create(ctx, tx, msg); err != nil {
 			return fmt.Errorf("create message: %w", err)
+		}
+
+		// Transfer draft attachments to the new message.
+		if len(draftAtts) > 0 {
+			if err := s.messageStore.LinkDraftAttachments(ctx, tx, draftID, msgID); err != nil {
+				return fmt.Errorf("link draft attachments: %w", err)
+			}
 		}
 		if err := s.threadStore.IncrMessageCount(ctx, tx, thread.ID, now, msg.Snippet); err != nil {
 			return fmt.Errorf("incr message count: %w", err)

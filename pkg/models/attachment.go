@@ -13,11 +13,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// Attachment represents a file attached to a message.
+// Attachment represents a file attached to a message or draft.
 type Attachment struct {
-	ID        uuid.UUID `json:"id"         db:"id"`
-	OrgID     uuid.UUID `json:"org_id"     db:"org_id"`
-	MessageID uuid.UUID `json:"message_id" db:"message_id"`
+	ID        uuid.UUID  `json:"id"                   db:"id"`
+	OrgID     uuid.UUID  `json:"org_id"               db:"org_id"`
+	MessageID *uuid.UUID `json:"message_id,omitempty" db:"message_id"`
+	DraftID   *uuid.UUID `json:"draft_id,omitempty"   db:"draft_id"`
 
 	Filename    string `json:"filename"     db:"filename"`
 	ContentType string `json:"content_type" db:"content_type"`

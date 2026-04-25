@@ -177,7 +177,7 @@ func processForRecipient(
 		attUploads = append(attUploads, attUpload{model: &models.Attachment{
 			ID:          uuid.New(),
 			OrgID:       inbox.OrgID,
-			MessageID:   msgID,
+			MessageID:   &msgID,
 			Filename:    filename,
 			ContentType: part.ContentType,
 			SizeBytes:   int64(len(part.Data)),

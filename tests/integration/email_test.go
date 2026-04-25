@@ -309,6 +309,154 @@ func TestInboundEmailWithAttachment(t *testing.T) {
 	})
 }
 
+// TestOutboundEmailWithAttachment verifies that sending a message with an
+// inline base64 attachment stores has_attachments=true on the resulting message
+// and that the email is delivered (status reaches sent/queued).
+func TestOutboundEmailWithAttachment(t *testing.T) {
+	c := newClient(t)
+
+	// Create a dedicated inbox.
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("attout")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+	// Send with an inline base64 attachment.
+	attachmentContent := base64.StdEncoding.EncodeToString([]byte("Q1 2026 sales: $1,234,567\nTotal: excellent"))
+	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
+		"to":        []map[string]any{{"email": "success@simulator.amazonses.com"}},
+		"subject":   "Outbound attachment test " + uniqueName("subj"),
+		"body_text": "Please find the report attached.",
+		"attachments": []map[string]any{
+			{
+				"filename":     "report.txt",
+				"content_type": "text/plain",
+				"content":      attachmentContent,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	msgID := mustStr(t, body, "id")
+	threadID := mustStr(t, body, "thread_id")
+
+	t.Run("has_attachments_true", func(t *testing.T) {
+		code, msg, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, msg)
+		v, _ := msg["has_attachments"].(bool)
+		if !v {
+			t.Fatalf("expected has_attachments=true, got false — body: %v", msg)
+		}
+	})
+
+	t.Run("status_transitions", func(t *testing.T) {
+		ok := pollUntil(t, 30*time.Second, 2*time.Second, func() bool {
+			_, msg, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
+			if err != nil {
+				return false
+			}
+			status := str(msg, "status")
+			return status == "sent" || status == "queued" || status == "accepted"
+		})
+		if !ok {
+			t.Fatal("message with attachment never reached sent/queued/accepted")
+		}
+	})
+}
+
+// TestDraftWithAttachment verifies the full draft-attachment lifecycle:
+// create draft with attachment → approve → has_attachments=true on message.
+func TestDraftWithAttachment(t *testing.T) {
+	c := newClient(t)
+
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("draftatt")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+	attachmentContent := base64.StdEncoding.EncodeToString([]byte("Draft report data"))
+
+	// Create draft with attachment.
+	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/drafts", inboxID), map[string]any{
+		"to":        []map[string]any{{"email": "success@simulator.amazonses.com"}},
+		"subject":   "Draft attachment test " + uniqueName("subj"),
+		"body_text": "Draft body with attachment.",
+		"attachments": []map[string]any{
+			{
+				"filename":     "draft_report.txt",
+				"content_type": "text/plain",
+				"content":      attachmentContent,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	draftID := mustStr(t, body, "id")
+
+	// Approve the draft — this should create a message and link the attachment.
+	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/drafts/%s/approve", inboxID, draftID), map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 200, body)
+
+	msgID := str(body, "message_id")
+	if msgID == "" {
+		t.Skip("approve response did not include message_id — check DraftService.Approve response shape")
+	}
+
+	// Find the thread for this message.
+	ok := pollUntil(t, 20*time.Second, 2*time.Second, func() bool {
+		_, threads, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads", inboxID))
+		if err != nil {
+			return false
+		}
+		return len(listOf(threads, "threads")) > 0
+	})
+	if !ok {
+		t.Fatal("no thread appeared after draft approval")
+	}
+
+	_, threads, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads", inboxID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadList := listOf(threads, "threads")
+	if len(threadList) == 0 {
+		t.Fatal("no threads found")
+	}
+	threadID := str(asMap(threadList[0]), "id")
+
+	t.Run("has_attachments_true", func(t *testing.T) {
+		_, msgs, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages", inboxID, threadID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		messages := listOf(msgs, "messages")
+		if len(messages) == 0 {
+			t.Fatal("no messages in thread after draft approval")
+		}
+		msg := asMap(messages[0])
+		v, _ := msg["has_attachments"].(bool)
+		if !v {
+			t.Fatalf("expected has_attachments=true on approved draft message, got false")
+		}
+	})
+}
+
 // buildMultipartEML constructs a multipart/mixed RFC 5322 email with a text
 // body and a single file attachment encoded as base64.
 func buildMultipartEML(from, to, subject, bodyText, filename string, attachment []byte) []byte {

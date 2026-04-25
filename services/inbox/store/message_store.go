@@ -29,6 +29,10 @@ type MessageStore interface {
 	UpdateStatus(ctx context.Context, tx pgx.Tx, orgID, messageID uuid.UUID, status models.MessageStatus) error
 	CreateAttachment(ctx context.Context, tx pgx.Tx, att *models.Attachment) error
 	ListAttachments(ctx context.Context, tx pgx.Tx, orgID, messageID uuid.UUID) ([]*models.Attachment, error)
+	CreateDraftAttachment(ctx context.Context, tx pgx.Tx, att *models.Attachment) error
+	ListDraftAttachments(ctx context.Context, tx pgx.Tx, orgID, draftID uuid.UUID) ([]*models.Attachment, error)
+	LinkDraftAttachments(ctx context.Context, tx pgx.Tx, draftID, msgID uuid.UUID) error
+	DeleteDraftAttachments(ctx context.Context, tx pgx.Tx, orgID, draftID uuid.UUID) error
 }
 
 // PostgresMessageStore implements MessageStore using PostgreSQL.
@@ -85,7 +89,7 @@ func (s *PostgresMessageStore) Create(ctx context.Context, tx pgx.Tx, msg *model
 		toJSON, ccJSON, bccJSON,
 		msg.ReplyTo, msg.Subject,
 		msg.TextS3Key, msg.HtmlS3Key, msg.RawS3Key,
-		msg.SizeBytes, len(msg.Attachments) > 0, headersJSON, metadataJSON,
+		msg.SizeBytes, msg.HasAttachments, headersJSON, metadataJSON,
 		msg.SentAt, msg.ReceivedAt,
 		msg.CreatedAt, msg.UpdatedAt,
 	)
@@ -189,14 +193,14 @@ func (s *PostgresMessageStore) UpdateStatus(ctx context.Context, tx pgx.Tx, orgI
 	return nil
 }
 
-// CreateAttachment inserts a new attachment record.
+// CreateAttachment inserts an attachment record linked to a message.
 func (s *PostgresMessageStore) CreateAttachment(ctx context.Context, tx pgx.Tx, att *models.Attachment) error {
 	q := `
-		INSERT INTO attachments (id, org_id, message_id, filename, content_type, size_bytes, s3_key, content_id, is_inline, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO attachments (id, org_id, message_id, draft_id, filename, content_type, size_bytes, s3_key, content_id, is_inline, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`
 	_, err := tx.Exec(ctx, q,
-		att.ID, att.OrgID, att.MessageID,
+		att.ID, att.OrgID, att.MessageID, att.DraftID,
 		att.Filename, att.ContentType,
 		att.SizeBytes, att.S3Key,
 		att.ContentID, att.Inline,
@@ -211,7 +215,7 @@ func (s *PostgresMessageStore) CreateAttachment(ctx context.Context, tx pgx.Tx, 
 // ListAttachments returns all attachments for a message.
 func (s *PostgresMessageStore) ListAttachments(ctx context.Context, tx pgx.Tx, orgID, messageID uuid.UUID) ([]*models.Attachment, error) {
 	q := `
-		SELECT id, org_id, message_id, filename, content_type, size_bytes, s3_key, content_id, is_inline, created_at
+		SELECT id, org_id, message_id, draft_id, filename, content_type, size_bytes, s3_key, content_id, is_inline, created_at
 		FROM attachments
 		WHERE org_id = $1 AND message_id = $2
 		ORDER BY created_at ASC
@@ -225,12 +229,76 @@ func (s *PostgresMessageStore) ListAttachments(ctx context.Context, tx pgx.Tx, o
 	var atts []*models.Attachment
 	for rows.Next() {
 		var a models.Attachment
-		if err := rows.Scan(&a.ID, &a.OrgID, &a.MessageID, &a.Filename, &a.ContentType, &a.SizeBytes, &a.S3Key, &a.ContentID, &a.Inline, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.OrgID, &a.MessageID, &a.DraftID, &a.Filename, &a.ContentType, &a.SizeBytes, &a.S3Key, &a.ContentID, &a.Inline, &a.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan attachment: %w", err)
 		}
 		atts = append(atts, &a)
 	}
 	return atts, rows.Err()
+}
+
+// CreateDraftAttachment inserts an attachment record linked to a draft (no message yet).
+func (s *PostgresMessageStore) CreateDraftAttachment(ctx context.Context, tx pgx.Tx, att *models.Attachment) error {
+	q := `
+		INSERT INTO attachments (id, org_id, message_id, draft_id, filename, content_type, size_bytes, s3_key, content_id, is_inline, created_at)
+		VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8, $9, $10)
+	`
+	_, err := tx.Exec(ctx, q,
+		att.ID, att.OrgID, att.DraftID,
+		att.Filename, att.ContentType,
+		att.SizeBytes, att.S3Key,
+		att.ContentID, att.Inline,
+		att.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("insert draft attachment: %w", err)
+	}
+	return nil
+}
+
+// ListDraftAttachments returns all attachments associated with a draft.
+func (s *PostgresMessageStore) ListDraftAttachments(ctx context.Context, tx pgx.Tx, orgID, draftID uuid.UUID) ([]*models.Attachment, error) {
+	q := `
+		SELECT id, org_id, message_id, draft_id, filename, content_type, size_bytes, s3_key, content_id, is_inline, created_at
+		FROM attachments
+		WHERE org_id = $1 AND draft_id = $2
+		ORDER BY created_at ASC
+	`
+	rows, err := tx.Query(ctx, q, orgID, draftID)
+	if err != nil {
+		return nil, fmt.Errorf("list draft attachments: %w", err)
+	}
+	defer rows.Close()
+
+	var atts []*models.Attachment
+	for rows.Next() {
+		var a models.Attachment
+		if err := rows.Scan(&a.ID, &a.OrgID, &a.MessageID, &a.DraftID, &a.Filename, &a.ContentType, &a.SizeBytes, &a.S3Key, &a.ContentID, &a.Inline, &a.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan draft attachment: %w", err)
+		}
+		atts = append(atts, &a)
+	}
+	return atts, rows.Err()
+}
+
+// LinkDraftAttachments transfers draft attachments to a message when a draft is approved.
+func (s *PostgresMessageStore) LinkDraftAttachments(ctx context.Context, tx pgx.Tx, draftID, msgID uuid.UUID) error {
+	q := `UPDATE attachments SET message_id = $1, draft_id = NULL WHERE draft_id = $2`
+	_, err := tx.Exec(ctx, q, msgID, draftID)
+	if err != nil {
+		return fmt.Errorf("link draft attachments: %w", err)
+	}
+	return nil
+}
+
+// DeleteDraftAttachments removes all attachment records for a draft (S3 objects are left for lifecycle cleanup).
+func (s *PostgresMessageStore) DeleteDraftAttachments(ctx context.Context, tx pgx.Tx, orgID, draftID uuid.UUID) error {
+	q := `DELETE FROM attachments WHERE org_id = $1 AND draft_id = $2`
+	_, err := tx.Exec(ctx, q, orgID, draftID)
+	if err != nil {
+		return fmt.Errorf("delete draft attachments: %w", err)
+	}
+	return nil
 }
 
 func scanMessage(row pgx.Row) (*models.Message, error) {

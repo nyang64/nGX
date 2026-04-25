@@ -266,6 +266,7 @@ resource "aws_lambda_function" "messages" {
       WEBHOOK_DELIVERY_QUEUE_URL = aws_sqs_queue.webhook_delivery.url
       WS_DISPATCH_QUEUE_URL      = aws_sqs_queue.ws_dispatch.url
       EMBEDDER_QUEUE_URL         = aws_sqs_queue.embedder.url
+      S3_BUCKET_ATTACHMENTS      = aws_s3_bucket.attachments.id
     })
   }
 
@@ -296,6 +297,7 @@ resource "aws_lambda_function" "drafts" {
       WEBHOOK_DELIVERY_QUEUE_URL = aws_sqs_queue.webhook_delivery.url
       WS_DISPATCH_QUEUE_URL      = aws_sqs_queue.ws_dispatch.url
       EMBEDDER_QUEUE_URL         = aws_sqs_queue.embedder.url
+      S3_BUCKET_ATTACHMENTS      = aws_s3_bucket.attachments.id
     })
   }
 

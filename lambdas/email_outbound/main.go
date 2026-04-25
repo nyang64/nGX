@@ -10,6 +10,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -47,12 +48,20 @@ type outboundJob struct {
 	BodyHTML  string `json:"body_html"`
 }
 
+// attData holds a downloaded attachment ready to embed in MIME.
+type attData struct {
+	filename    string
+	contentType string
+	data        []byte
+}
+
 var (
-	pool      *pgxpool.Pool
-	emailSt   *emailstore.EmailStore
-	emailsS3  *s3pkg.Client
-	sesClient *sesv2sdk.Client
-	publisher *sqspkg.Publisher
+	pool          *pgxpool.Pool
+	emailSt       *emailstore.EmailStore
+	emailsS3      *s3pkg.Client
+	attachmentsS3 *s3pkg.Client
+	sesClient     *sesv2sdk.Client
+	publisher     *sqspkg.Publisher
 )
 
 func init() {
@@ -63,7 +72,12 @@ func init() {
 	var err error
 	emailsS3, err = s3pkg.NewFromAWS(ctx, os.Getenv("S3_BUCKET_EMAILS"))
 	if err != nil {
-		slog.Error("email_outbound: init S3 client", "error", err)
+		slog.Error("email_outbound: init emails S3 client", "error", err)
+		os.Exit(1)
+	}
+	attachmentsS3, err = s3pkg.NewFromAWS(ctx, os.Getenv("S3_BUCKET_ATTACHMENTS"))
+	if err != nil {
+		slog.Error("email_outbound: init attachments S3 client", "error", err)
 		os.Exit(1)
 	}
 
@@ -133,13 +147,34 @@ func processRecord(ctx context.Context, record awsevents.SQSMessage) error {
 		}
 	}
 
+	// Load attachments from S3.
+	var attachments []attData
+	if msg.HasAttachments {
+		atts, err := emailSt.GetAttachmentsByMessageID(ctx, orgID, messageID)
+		if err != nil {
+			slog.Warn("email_outbound: load attachments", "message_id", messageID, "error", err)
+		}
+		for _, att := range atts {
+			data, err := attachmentsS3.Download(ctx, att.S3Key)
+			if err != nil {
+				slog.Warn("email_outbound: download attachment", "s3_key", att.S3Key, "error", err)
+				continue
+			}
+			attachments = append(attachments, attData{
+				filename:    att.Filename,
+				contentType: att.ContentType,
+				data:        data,
+			})
+		}
+	}
+
 	// Collect recipients.
 	toAddrs := emailAddrsToStrings(msg.To)
 	ccAddrs := emailAddrsToStrings(msg.Cc)
 	bccAddrs := emailAddrsToStrings(msg.Bcc)
 
 	// Build RFC 5322 MIME and send via SES.
-	rawMIME := buildMIME(msg, toAddrs, ccAddrs, bodyText, bodyHTML)
+	rawMIME := buildMIME(msg, toAddrs, ccAddrs, bodyText, bodyHTML, attachments)
 
 	sesInput := &sesv2sdk.SendEmailInput{
 		Content: &sesv2types.EmailContent{
@@ -197,10 +232,10 @@ func processRecord(ctx context.Context, record awsevents.SQSMessage) error {
 	})
 }
 
-// buildMIME assembles a minimal RFC 5322 message.
-// Uses multipart/alternative when both text and HTML are present;
-// falls back to text/plain for text-only or empty bodies.
-func buildMIME(msg *models.Message, toAddrs, ccAddrs []string, textBody, htmlBody string) []byte {
+// buildMIME assembles a RFC 5322 message.
+// With attachments: multipart/mixed wrapping the body + each attachment.
+// Without attachments: multipart/alternative for text+html, text/plain otherwise.
+func buildMIME(msg *models.Message, toAddrs, ccAddrs []string, textBody, htmlBody string, attachments []attData) []byte {
 	var buf bytes.Buffer
 
 	fromAddr := msg.From.Email
@@ -235,11 +270,50 @@ func buildMIME(msg *models.Message, toAddrs, ccAddrs []string, textBody, htmlBod
 		buf.WriteString(fmt.Sprintf("Reply-To: %s\r\n", msg.ReplyTo))
 	}
 
+	if len(attachments) > 0 {
+		// Wrap everything in multipart/mixed.
+		outerBoundary := uuid.New().String()
+		buf.WriteString(fmt.Sprintf("Content-Type: multipart/mixed; boundary=%q\r\n\r\n", outerBoundary))
+
+		// First part: the message body.
+		buf.WriteString(fmt.Sprintf("--%s\r\n", outerBoundary))
+		writeBodyPart(&buf, textBody, htmlBody)
+
+		// Subsequent parts: attachments.
+		for _, att := range attachments {
+			buf.WriteString(fmt.Sprintf("\r\n--%s\r\n", outerBoundary))
+			ct := att.contentType
+			if ct == "" {
+				ct = "application/octet-stream"
+			}
+			buf.WriteString(fmt.Sprintf("Content-Type: %s\r\n", ct))
+			buf.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=%q\r\n", att.filename))
+			buf.WriteString("Content-Transfer-Encoding: base64\r\n\r\n")
+			encoded := base64.StdEncoding.EncodeToString(att.data)
+			// Wrap base64 at 76 chars per RFC 2045.
+			for i := 0; i < len(encoded); i += 76 {
+				end := i + 76
+				if end > len(encoded) {
+					end = len(encoded)
+				}
+				buf.WriteString(encoded[i:end])
+				buf.WriteString("\r\n")
+			}
+		}
+		buf.WriteString(fmt.Sprintf("--%s--\r\n", outerBoundary))
+	} else {
+		writeBodyPart(&buf, textBody, htmlBody)
+	}
+
+	return buf.Bytes()
+}
+
+// writeBodyPart writes the text/HTML body section directly to buf.
+// Uses multipart/alternative when both parts are present.
+func writeBodyPart(buf *bytes.Buffer, textBody, htmlBody string) {
 	if textBody != "" && htmlBody != "" {
-		// Both parts: use multipart/alternative.
 		boundary := uuid.New().String()
-		buf.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=%q\r\n", boundary))
-		buf.WriteString("\r\n")
+		buf.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=%q\r\n\r\n", boundary))
 
 		buf.WriteString(fmt.Sprintf("--%s\r\n", boundary))
 		buf.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
@@ -260,14 +334,11 @@ func buildMIME(msg *models.Message, toAddrs, ccAddrs []string, textBody, htmlBod
 		buf.WriteString(htmlBody)
 		buf.WriteString("\r\n")
 	} else {
-		// text-only or empty — always safe to send as text/plain.
 		buf.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
 		buf.WriteString("Content-Transfer-Encoding: quoted-printable\r\n\r\n")
 		buf.WriteString(textBody)
 		buf.WriteString("\r\n")
 	}
-
-	return buf.Bytes()
 }
 
 func emailAddrsToStrings(addrs []models.EmailAddress) []string {

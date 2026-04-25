@@ -50,6 +50,7 @@ func init() {
 		inboxstore.NewPostgresInboxStore(pool),
 		publisher, // eventProducer
 		publisher, // outboundProducer (same instance implements both)
+		nil,       // attachmentsS3 — scheduler doesn't handle inline attachment uploads
 	)
 }
 

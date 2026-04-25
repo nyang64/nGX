@@ -9,6 +9,7 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -17,6 +18,7 @@ import (
 	dbpkg "agentmail/pkg/db"
 	"agentmail/pkg/events"
 	"agentmail/pkg/models"
+	s3pkg "agentmail/pkg/s3"
 	"agentmail/services/inbox/store"
 
 	"github.com/google/uuid"
@@ -31,16 +33,24 @@ func generateMessageID() string {
 	return fmt.Sprintf("%s@nGX", uuid.New().String())
 }
 
+// AttachmentRequest is an inline base64-encoded attachment for send/draft requests.
+type AttachmentRequest struct {
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	Content     string `json:"content"` // base64-encoded data
+}
+
 // SendMessageRequest is the input for sending a new message.
 type SendMessageRequest struct {
-	To        []models.EmailAddress `json:"to"`
-	CC        []models.EmailAddress `json:"cc"`
-	BCC       []models.EmailAddress `json:"bcc"`
-	Subject   string                `json:"subject"`
-	BodyText  string                `json:"body_text"`
-	BodyHTML  string                `json:"body_html"`
-	ReplyToID *uuid.UUID            `json:"reply_to_id,omitempty"`
-	Metadata  map[string]any        `json:"metadata,omitempty"`
+	To          []models.EmailAddress `json:"to"`
+	CC          []models.EmailAddress `json:"cc"`
+	BCC         []models.EmailAddress `json:"bcc"`
+	Subject     string                `json:"subject"`
+	BodyText    string                `json:"body_text"`
+	BodyHTML    string                `json:"body_html"`
+	ReplyToID   *uuid.UUID            `json:"reply_to_id,omitempty"`
+	Metadata    map[string]any        `json:"metadata,omitempty"`
+	Attachments []AttachmentRequest   `json:"attachments,omitempty"`
 }
 
 // OutboundJob is the payload published to the email outbound queue.
@@ -69,6 +79,7 @@ type MessageService struct {
 	inboxStore       store.InboxStore
 	outboundProducer events.OutboundPublisher
 	eventPublisher   events.EventPublisher
+	attachmentsS3    *s3pkg.Client
 }
 
 // NewMessageService creates a new MessageService.
@@ -79,6 +90,7 @@ func NewMessageService(
 	inboxStore store.InboxStore,
 	outboundProducer events.OutboundPublisher,
 	eventPublisher events.EventPublisher,
+	attachmentsS3 *s3pkg.Client,
 ) *MessageService {
 	return &MessageService{
 		pool:             pool,
@@ -87,6 +99,7 @@ func NewMessageService(
 		inboxStore:       inboxStore,
 		outboundProducer: outboundProducer,
 		eventPublisher:   eventPublisher,
+		attachmentsS3:    attachmentsS3,
 	}
 }
 
@@ -133,6 +146,41 @@ func (s *MessageService) Get(ctx context.Context, claims *auth.Claims, messageID
 func (s *MessageService) Send(ctx context.Context, claims *auth.Claims, inboxID uuid.UUID, req SendMessageRequest) (*models.Message, error) {
 	var msg *models.Message
 	now := time.Now().UTC()
+
+	// Pre-generate the message ID so we can use it as the S3 key prefix before
+	// the DB transaction opens (S3 uploads must not run inside a transaction).
+	msgID := uuid.New()
+
+	// Upload inline attachments to S3 before the transaction.
+	type attUpload struct {
+		s3Key       string
+		filename    string
+		contentType string
+		sizeBytes   int64
+	}
+	var attUploads []attUpload
+	for _, a := range req.Attachments {
+		data, err := base64.StdEncoding.DecodeString(a.Content)
+		if err != nil {
+			return nil, fmt.Errorf("decode attachment %q: %w", a.Filename, err)
+		}
+		ct := a.ContentType
+		if ct == "" {
+			ct = "application/octet-stream"
+		}
+		key := fmt.Sprintf("%s/%s/%s", claims.OrgID, msgID, a.Filename)
+		if s.attachmentsS3 != nil {
+			if err := s.attachmentsS3.Upload(ctx, key, data, ct); err != nil {
+				return nil, fmt.Errorf("upload attachment %q: %w", a.Filename, err)
+			}
+		}
+		attUploads = append(attUploads, attUpload{
+			s3Key:       key,
+			filename:    a.Filename,
+			contentType: ct,
+			sizeBytes:   int64(len(data)),
+		})
+	}
 
 	err := dbpkg.WithOrgTx(ctx, s.pool, claims.OrgID, func(tx pgx.Tx) error {
 		// Load the inbox to get the From address.
@@ -201,32 +249,49 @@ func (s *MessageService) Send(ctx context.Context, claims *auth.Claims, inboxID 
 		}
 
 		msg = &models.Message{
-			ID:         uuid.New(),
-			OrgID:      claims.OrgID,
-			InboxID:    inboxID,
-			ThreadID:   thread.ID,
-			MessageID:  generateMessageID(),
-			Direction:  models.DirectionOutbound,
-			Status:     models.MessageStatusSending,
+			ID:             msgID,
+			OrgID:          claims.OrgID,
+			InboxID:        inboxID,
+			ThreadID:       thread.ID,
+			MessageID:      generateMessageID(),
+			Direction:      models.DirectionOutbound,
+			Status:         models.MessageStatusSending,
 			From: models.EmailAddress{
 				Email: inbox.Email,
 				Name:  inbox.DisplayName,
 			},
-			To:         req.To,
-			Cc:         req.CC,
-			Bcc:        req.BCC,
-			Subject:    req.Subject,
-			InReplyTo:  inReplyTo,
-			References: references,
-			Metadata:   metadata,
-			Snippet:    snippetFrom(req.BodyText),
-			SentAt:     &now,
-			CreatedAt:  now,
-			UpdatedAt:  now,
+			To:             req.To,
+			Cc:             req.CC,
+			Bcc:            req.BCC,
+			Subject:        req.Subject,
+			InReplyTo:      inReplyTo,
+			References:     references,
+			Metadata:       metadata,
+			Snippet:        snippetFrom(req.BodyText),
+			HasAttachments: len(attUploads) > 0,
+			SentAt:         &now,
+			CreatedAt:      now,
+			UpdatedAt:      now,
 		}
 
 		if err := s.messageStore.Create(ctx, tx, msg); err != nil {
 			return fmt.Errorf("create message: %w", err)
+		}
+
+		for _, a := range attUploads {
+			att := &models.Attachment{
+				ID:          uuid.New(),
+				OrgID:       claims.OrgID,
+				MessageID:   &msgID,
+				Filename:    a.filename,
+				ContentType: a.contentType,
+				SizeBytes:   a.sizeBytes,
+				S3Key:       a.s3Key,
+				CreatedAt:   now,
+			}
+			if err := s.messageStore.CreateAttachment(ctx, tx, att); err != nil {
+				return fmt.Errorf("create attachment record: %w", err)
+			}
 		}
 
 		// Update thread message count and snippet.
