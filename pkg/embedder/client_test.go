@@ -51,7 +51,7 @@ func TestEmbed_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(srv.URL, "test-model", 3)
+	c := New(srv.URL, "test-model", "", 3)
 	vec, err := c.Embed(context.Background(), "hello world")
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
@@ -74,7 +74,7 @@ func TestEmbed_ServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(srv.URL, "test-model", 3)
+	c := New(srv.URL, "test-model", "", 3)
 	_, err := c.Embed(context.Background(), "hello")
 	if err == nil {
 		t.Fatal("expected error for 500 response, got nil")
@@ -91,7 +91,7 @@ func TestEmbed_EmptyResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(srv.URL, "test-model", 3)
+	c := New(srv.URL, "test-model", "", 3)
 	_, err := c.Embed(context.Background(), "hello")
 	if err == nil {
 		t.Fatal("expected error for empty data, got nil")
@@ -113,7 +113,7 @@ func TestEmbed_NoDimsTruncation(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(srv.URL, "test-model", 0)
+	c := New(srv.URL, "test-model", "", 0)
 	vec, err := c.Embed(context.Background(), "hello")
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
@@ -138,7 +138,7 @@ func TestNew_TrimsTrailingSlash(t *testing.T) {
 	defer srv.Close()
 
 	// Pass URL with trailing slash — should not result in //embeddings
-	c := New(srv.URL+"/", "test-model", 256)
+	c := New(srv.URL+"/", "test-model", "", 256)
 	_, err := c.Embed(context.Background(), "test")
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
