@@ -653,7 +653,7 @@ resource "aws_lambda_function" "domains" {
   environment {
     variables = merge(local.db_env, {
       SES_RULE_SET_NAME = aws_ses_receipt_rule_set.main.rule_set_name
-      S3_EMAILS_BUCKET  = aws_s3_bucket.emails.id
+      S3_BUCKET_EMAILS  = aws_s3_bucket.emails.id
     })
   }
 

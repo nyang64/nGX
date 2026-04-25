@@ -556,3 +556,114 @@ func TestDomains(t *testing.T) {
 		mustCode(t, code, 200, body)
 	})
 }
+
+// TestCustomDomainProvisioning verifies the full bring-your-own-domain lifecycle:
+// register → list → get → delete. Uses mail.nyklabs.com as a throwaway test domain;
+// DNS records are NOT added so the domain stays in "pending" status throughout.
+// The DELETE at the end removes all SES resources (identity + receipt rule) and the DB record.
+func TestCustomDomainProvisioning(t *testing.T) {
+	c := newClient(t)
+	const testDomain = "mail.nyklabs.com"
+
+	// Resolve the pod ID from the first available pod — required by the domain_configs schema.
+	_, podsBody, err := c.get("/v1/pods")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pods := listOf(podsBody, "pods")
+	if len(pods) == 0 {
+		t.Skip("no pods available, skipping")
+	}
+	podID := str(asMap(pods[0]), "id")
+
+	// Step 1: register the domain — creates SES identity, DKIM tokens, receipt rule.
+	code, body, err := c.post("/v1/domains", map[string]any{"Domain": testDomain, "PodID": podID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+
+	domainID := str(asMap(body["Domain"]), "id")
+	if domainID == "" {
+		t.Fatal("register response did not include domain id")
+	}
+
+	// Ensure cleanup runs even if subtests fail.
+	t.Cleanup(func() {
+		c.delete("/v1/domains/" + domainID) //nolint:errcheck
+	})
+
+	t.Run("register_returns_dns_records", func(t *testing.T) {
+		dnsRecords := listOf(body, "DNSRecords")
+		if len(dnsRecords) != 5 {
+			t.Fatalf("expected 5 DNS records (1 TXT + 1 MX + 3 CNAME), got %d", len(dnsRecords))
+		}
+		types := map[string]int{}
+		for _, r := range dnsRecords {
+			types[str(asMap(r), "type")]++
+		}
+
+		if types["TXT"] != 1 {
+			t.Errorf("expected 1 TXT record, got %d", types["TXT"])
+		}
+		if types["MX"] != 1 {
+			t.Errorf("expected 1 MX record, got %d", types["MX"])
+		}
+		if types["CNAME"] != 3 {
+			t.Errorf("expected 3 CNAME records, got %d", types["CNAME"])
+		}
+	})
+
+	t.Run("register_status_is_pending", func(t *testing.T) {
+		status := str(asMap(body["Domain"]), "status")
+		if status != "pending" {
+			t.Errorf("expected status=pending, got %q", status)
+		}
+	})
+
+	t.Run("appears_in_list", func(t *testing.T) {
+		code, body, err := c.get("/v1/domains")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		found := false
+		for _, d := range listOf(body, "domains") {
+			if str(asMap(d), "id") == domainID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("domain %s not found in list after registration", testDomain)
+		}
+	})
+
+	t.Run("get_by_id", func(t *testing.T) {
+		code, body, err := c.get("/v1/domains/" + domainID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		if got := str(body, "domain"); got != testDomain {
+			t.Errorf("expected domain=%q, got %q", testDomain, got)
+		}
+	})
+
+	t.Run("delete_removes_domain", func(t *testing.T) {
+		code, _, err := c.delete("/v1/domains/" + domainID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 204, nil)
+
+		// Confirm it's gone.
+		code, body, err = c.get("/v1/domains/" + domainID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 404 {
+			t.Errorf("expected 404 after delete, got %d: %v", code, body)
+		}
+	})
+}
