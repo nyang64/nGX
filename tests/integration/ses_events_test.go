@@ -238,6 +238,20 @@ func TestSESEventsSQSInjection(t *testing.T) {
 			wantStatus:  "", // log-only; status must remain unchanged
 			pollTimeout: 10 * time.Second,
 		},
+		{
+			name:        "Email Opened → no status change",
+			addrPrefix:  "ses-opened",
+			detailType:  "Email Opened",
+			wantStatus:  "", // engagement signal only; no status transition
+			pollTimeout: 10 * time.Second,
+		},
+		{
+			name:        "Email Clicked → no status change",
+			addrPrefix:  "ses-clicked",
+			detailType:  "Email Clicked",
+			wantStatus:  "", // engagement signal only; no status transition
+			pollTimeout: 10 * time.Second,
+		},
 	}
 
 	for _, tc := range cases {
