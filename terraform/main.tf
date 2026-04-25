@@ -28,7 +28,7 @@ terraform {
 
 provider "aws" {
   region  = var.aws_region
-  profile = "nyk-tf"
+  profile = var.aws_profile
 
   default_tags {
     tags = local.common_tags

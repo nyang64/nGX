@@ -16,6 +16,12 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
+variable "aws_profile" {
+  description = "AWS CLI profile to use. Defaults to null (uses AWS_PROFILE env var or default profile). Set via TF_VAR_aws_profile."
+  type        = string
+  default     = null
+}
+
 # ── Networking ─────────────────────────────────────────────────────────────────
 
 variable "vpc_cidr" {

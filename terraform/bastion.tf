@@ -131,7 +131,7 @@ output "bastion_connect_cmd" {
   description = "SSM port-forward command to reach RDS Proxy on localhost:5432"
   value       = <<-EOT
     aws ssm start-session \
-      --profile nyk-tf \
+      ${var.aws_profile != null ? "--profile ${var.aws_profile} \\" : "\\"}
       --target ${aws_instance.bastion.id} \
       --document-name AWS-StartPortForwardingSessionToRemoteHost \
       --parameters '{"host":["${aws_db_proxy.main.endpoint}"],"portNumber":["5432"],"localPortNumber":["5432"]}'

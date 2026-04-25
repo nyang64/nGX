@@ -4,6 +4,7 @@
 app_name    = "ngx"
 environment = "prod"
 aws_region  = "us-east-1"
+# aws_profile = "nyk-tf"  # or set TF_VAR_aws_profile in .env
 
 # Networking
 vpc_cidr = "10.0.0.0/16"
