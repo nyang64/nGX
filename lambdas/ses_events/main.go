@@ -129,10 +129,16 @@ func processRecord(ctx context.Context, record events.SQSMessage) error {
 		if pool == nil {
 			return fmt.Errorf("ses_events: database pool not initialised")
 		}
+		// Always update sent_at to the SES delivery confirmation time.
+		// Also advance status to 'sent' if still in 'sending' (e.g. if email_outbound
+		// hasn't finished yet), but leave it unchanged if already at a terminal status.
 		_, err := pool.Exec(ctx,
-			`UPDATE messages SET status = $1, sent_at = NOW(), updated_at = NOW()
-			 WHERE message_id_header = $2 AND status != $1`,
-			string(models.MessageStatusSent), rfc5322MsgID,
+			`UPDATE messages
+			 SET sent_at    = NOW(),
+			     updated_at = NOW(),
+			     status     = CASE WHEN status = 'sending' THEN 'sent' ELSE status END
+			 WHERE message_id_header = $1`,
+			rfc5322MsgID,
 		)
 		if err != nil {
 			return err

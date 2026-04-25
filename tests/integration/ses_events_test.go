@@ -17,15 +17,43 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
-	lambdasdk "github.com/aws/aws-sdk-go-v2/service/lambda"
+	sqssdk "github.com/aws/aws-sdk-go-v2/service/sqs"
 )
 
-// buildSQSEventWithEBPayload constructs the JSON payload for a direct Lambda
-// invocation that simulates EventBridge → SQS → ses_events Lambda.
-// The SQS body is the raw EventBridge event envelope (no SNS wrapper).
-func buildSQSEventWithEBPayload(detailType, sesMessageID, rfc5322MsgID string) []byte {
-	// EventBridge SES event envelope as it arrives in the SQS message body.
-	ebEvent := map[string]any{
+// sesTestEnv holds AWS clients and queue URL, shared across sub-tests.
+type sesTestEnv struct {
+	sqsClient *sqssdk.Client
+	queueURL  string
+}
+
+// newSESTestEnv loads AWS config and resolves the ses_events SQS queue URL.
+// Skips the test if TEST_LAMBDA_PREFIX or TEST_AWS_REGION are not set.
+func newSESTestEnv(t *testing.T) *sesTestEnv {
+	t.Helper()
+	lambdaPrefix, awsRegion := requireLambdaEnv(t)
+
+	ctx := context.Background()
+	awsConf, err := awscfg.LoadDefaultConfig(ctx, awscfg.WithRegion(awsRegion))
+	if err != nil {
+		t.Fatalf("load AWS config: %v", err)
+	}
+
+	sqsClient := sqssdk.NewFromConfig(awsConf)
+	queueName := lambdaPrefix + "-ses-events"
+	out, err := sqsClient.GetQueueUrl(ctx, &sqssdk.GetQueueUrlInput{
+		QueueName: aws.String(queueName),
+	})
+	if err != nil {
+		t.Fatalf("get queue URL for %s: %v", queueName, err)
+	}
+
+	return &sesTestEnv{sqsClient: sqsClient, queueURL: *out.QueueUrl}
+}
+
+// buildEBEventBody returns the EventBridge SES event JSON as it arrives as an
+// SQS message body after the EventBridge rule routes it.
+func buildEBEventBody(detailType, sesMessageID, rfc5322MsgID string) string {
+	evt := map[string]any{
 		"version":     "0",
 		"id":          fmt.Sprintf("test-%d", time.Now().UnixNano()),
 		"source":      "aws.ses",
@@ -39,24 +67,237 @@ func buildSQSEventWithEBPayload(detailType, sesMessageID, rfc5322MsgID string) [
 				"headers": []map[string]any{
 					{"name": "From", "value": "sender@example.com"},
 					{"name": "To", "value": "recipient@example.com"},
-					// rfc5322MsgID is stored in the DB without angle brackets.
-				// The Lambda strips <> from the header value before querying,
-				// so we include them here to mirror a real SES EventBridge event.
-				{"name": "Message-ID", "value": fmt.Sprintf("<%s>", rfc5322MsgID)},
+					// Angle-bracket form mirrors a real SES EventBridge event.
+					// The Lambda strips <> before querying message_id_header.
+					{"name": "Message-ID", "value": fmt.Sprintf("<%s>", rfc5322MsgID)},
 					{"name": "Subject", "value": "Integration test"},
 				},
 			},
 		},
 	}
-	ebBody, _ := json.Marshal(ebEvent)
+	b, _ := json.Marshal(evt)
+	return string(b)
+}
 
-	// Wrap in an SQS event as the Lambda runtime would deliver it.
+// injectSESEvent sends a synthetic EventBridge SES event directly into the
+// ses_events SQS queue, bypassing EventBridge. The ses_events Lambda picks
+// it up via the SQS event source mapping.
+func (e *sesTestEnv) injectSESEvent(t *testing.T, detailType, sesMessageID, rfc5322MsgID string) {
+	t.Helper()
+	body := buildEBEventBody(detailType, sesMessageID, rfc5322MsgID)
+	_, err := e.sqsClient.SendMessage(context.Background(), &sqssdk.SendMessageInput{
+		QueueUrl:    aws.String(e.queueURL),
+		MessageBody: aws.String(body),
+	})
+	if err != nil {
+		t.Fatalf("inject SES event %q: %v", detailType, err)
+	}
+	t.Logf("injected %q for message_id=%s", detailType, rfc5322MsgID)
+}
+
+// sendAndResolveMessageID creates an outbound message and polls until
+// message_id_header is populated by the email_outbound Lambda.
+// Returns inboxID, threadID, msgID, rfc5322MsgID.
+func sendAndResolveMessageID(t *testing.T, c *client, addrPrefix string) (inboxID, threadID, msgID, rfc5322MsgID string) {
+	t.Helper()
+
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName(addrPrefix)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID = mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
+		"to":        []map[string]any{{"email": "success@simulator.amazonses.com"}},
+		"subject":   "SES events test " + uniqueName("subj"),
+		"body_text": "Integration test — SES event injection",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	msgID = mustStr(t, body, "id")
+	threadID = mustStr(t, body, "thread_id")
+
+	// Wait for email_outbound to process: it populates message_id_header which
+	// ses_events Lambda uses to match the row.
+	ok := pollUntil(t, 30*time.Second, 2*time.Second, func() bool {
+		_, b, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
+		if err != nil {
+			return false
+		}
+		rfc5322MsgID = str(b, "message_id")
+		return rfc5322MsgID != ""
+	})
+	if !ok {
+		t.Skip("message_id_header not populated after 30s — email_outbound may not be running")
+	}
+	return inboxID, threadID, msgID, rfc5322MsgID
+}
+
+// messageStatus fetches the current status of a message.
+func messageStatus(t *testing.T, c *client, inboxID, threadID, msgID string) string {
+	t.Helper()
+	_, body, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
+	if err != nil {
+		return ""
+	}
+	return str(body, "status")
+}
+
+// ── E2E: Email Delivered ──────────────────────────────────────────────────────
+
+// TestSESEventsDeliveredE2E verifies the full SES delivery pipeline end-to-end:
+//
+//	send → SES → EventBridge "Email Delivered" → SQS → ses_events Lambda → DB
+//
+// This is the only test that exercises the EventBridge filter rule with real AWS
+// traffic. The other five event types use direct SQS injection (see below).
+//
+// Uses success@simulator.amazonses.com which always delivers without sandbox issues.
+//
+// Requires: TEST_BASE_URL, TEST_API_KEY, TEST_LAMBDA_PREFIX, TEST_AWS_REGION
+func TestSESEventsDeliveredE2E(t *testing.T) {
+	c := newClient(t)
+	_ = newSESTestEnv(t) // validates AWS env vars are present
+
+	inboxID, threadID, msgID, _ := sendAndResolveMessageID(t, c, "e2e-dlv")
+
+	// Wait for the real SES "Email Delivered" event to flow through EventBridge →
+	// SQS → ses_events Lambda. The Lambda updates sent_at unconditionally on
+	// Email Delivered, so we poll until sent_at is non-null.
+	//
+	// Status may already be 'sent' (set by email_outbound). We verify it remains
+	// 'sent' and that sent_at is populated — confirming the full pipeline ran.
+	ok := pollUntil(t, 90*time.Second, 3*time.Second, func() bool {
+		_, body, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
+		if err != nil {
+			return false
+		}
+		return str(body, "status") == "sent" && str(body, "sent_at") != ""
+	})
+	if !ok {
+		_, body, _ := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
+		t.Fatalf("message never reached sent+sent_at state after 90s; status=%s sent_at=%s",
+			str(body, "status"), str(body, "sent_at"))
+	}
+}
+
+// ── SQS injection tests for all other event types ────────────────────────────
+
+// TestSESEventsSQSInjection covers the remaining 5 SES event types by injecting
+// synthetic EventBridge events directly into the ses_events SQS queue.
+// This tests the SQS → ses_events Lambda → DB path for each event type.
+//
+// Requires: TEST_BASE_URL, TEST_API_KEY, TEST_LAMBDA_PREFIX, TEST_AWS_REGION
+func TestSESEventsSQSInjection(t *testing.T) {
+	c := newClient(t)
+	env := newSESTestEnv(t)
+
+	cases := []struct {
+		name           string
+		addrPrefix     string
+		detailType     string
+		wantStatus     string // "" means status must remain unchanged
+		pollTimeout    time.Duration
+	}{
+		{
+			name:        "Email Bounced → bounced",
+			addrPrefix:  "ses-bounce",
+			detailType:  "Email Bounced",
+			wantStatus:  "bounced",
+			pollTimeout: 20 * time.Second,
+		},
+		{
+			name:        "Email Complaint Received → failed",
+			addrPrefix:  "ses-complaint",
+			detailType:  "Email Complaint Received",
+			wantStatus:  "failed",
+			pollTimeout: 20 * time.Second,
+		},
+		{
+			name:        "Email Rejected → failed",
+			addrPrefix:  "ses-rejected",
+			detailType:  "Email Rejected",
+			wantStatus:  "failed",
+			pollTimeout: 20 * time.Second,
+		},
+		{
+			name:        "Email Rendering Failed → failed",
+			addrPrefix:  "ses-render",
+			detailType:  "Email Rendering Failed",
+			wantStatus:  "failed",
+			pollTimeout: 20 * time.Second,
+		},
+		{
+			name:        "Email Delivery Delayed → no status change",
+			addrPrefix:  "ses-delayed",
+			detailType:  "Email Delivery Delayed",
+			wantStatus:  "", // log-only; status must remain unchanged
+			pollTimeout: 10 * time.Second,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			inboxID, threadID, msgID, rfc5322MsgID := sendAndResolveMessageID(t, c, tc.addrPrefix)
+			statusBefore := messageStatus(t, c, inboxID, threadID, msgID)
+
+			env.injectSESEvent(t,
+				tc.detailType,
+				"ses-injected-"+uniqueName("id"),
+				rfc5322MsgID,
+			)
+
+			if tc.wantStatus == "" {
+				// Email Delivery Delayed: no status change expected.
+				// Wait the poll window and assert status is unchanged.
+				time.Sleep(tc.pollTimeout)
+				statusAfter := messageStatus(t, c, inboxID, threadID, msgID)
+				if statusAfter != statusBefore {
+					t.Errorf("Email Delivery Delayed must not change status: was %q, got %q",
+						statusBefore, statusAfter)
+				}
+				return
+			}
+
+			ok := pollUntil(t, tc.pollTimeout, 1*time.Second, func() bool {
+				return messageStatus(t, c, inboxID, threadID, msgID) == tc.wantStatus
+			})
+			if !ok {
+				got := messageStatus(t, c, inboxID, threadID, msgID)
+				t.Fatalf("%s: status never reached %q (got %q)", tc.detailType, tc.wantStatus, got)
+			}
+		})
+	}
+}
+
+// requireLambdaEnv returns TEST_LAMBDA_PREFIX and TEST_AWS_REGION, skipping
+// the test if either is missing.
+func requireLambdaEnv(t *testing.T) (lambdaPrefix, awsRegion string) {
+	t.Helper()
+	lambdaPrefix = os.Getenv("TEST_LAMBDA_PREFIX")
+	awsRegion = os.Getenv("TEST_AWS_REGION")
+	if lambdaPrefix == "" || awsRegion == "" {
+		t.Skip("TEST_LAMBDA_PREFIX and TEST_AWS_REGION must be set")
+	}
+	return lambdaPrefix, awsRegion
+}
+
+// buildSQSEventWithEBPayload is retained for backward compatibility with any
+// external tooling that references the helper.  New tests use injectSESEvent.
+func buildSQSEventWithEBPayload(detailType, sesMessageID, rfc5322MsgID string) []byte {
 	sqsEvent := map[string]any{
 		"Records": []map[string]any{
 			{
 				"messageId":     fmt.Sprintf("test-sqs-%d", time.Now().UnixNano()),
 				"receiptHandle": "test-receipt",
-				"body":          string(ebBody),
+				"body":          buildEBEventBody(detailType, sesMessageID, rfc5322MsgID),
 				"attributes": map[string]string{
 					"ApproximateReceiveCount":          "1",
 					"SentTimestamp":                    fmt.Sprintf("%d", time.Now().UnixMilli()),
@@ -73,164 +314,4 @@ func buildSQSEventWithEBPayload(detailType, sesMessageID, rfc5322MsgID string) [
 	}
 	b, _ := json.Marshal(sqsEvent)
 	return b
-}
-
-// TestSESEventsBounce verifies that a bounce event (delivered via EventBridge →
-// SQS → ses_events Lambda) sets the message status to "failed".
-//
-// Requires: TEST_BASE_URL, TEST_API_KEY, TEST_LAMBDA_PREFIX, TEST_AWS_REGION
-func TestSESEventsBounce(t *testing.T) {
-	c := newClient(t)
-	lambdaPrefix, awsRegion := requireLambdaEnv(t)
-
-	// Create an inbox and send a message to get a real message_id_header.
-	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("evtbounce")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	mustCode(t, code, 201, body)
-	inboxID := mustStr(t, body, "id")
-	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
-
-	// Send a message — use bounce@simulator.amazonses.com so SES accepts it.
-	// We don't wait for real SES delivery; we'll inject the bounce event ourselves.
-	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
-		"to":        []map[string]any{{"email": "bounce@simulator.amazonses.com"}},
-		"subject":   "Bounce test " + uniqueName("subj"),
-		"body_text": "Integration test bounce event",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	mustCode(t, code, 201, body)
-	msgID := mustStr(t, body, "id")
-	threadID := mustStr(t, body, "thread_id")
-
-	// Read back the message to get its RFC 5322 Message-ID (message_id_header).
-	code, body, err = c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	mustCode(t, code, 200, body)
-	rfc5322MsgID := str(body, "message_id") // model field mapped from message_id_header
-	if rfc5322MsgID == "" {
-		t.Skip("message has no message_id (message_id_header) — cannot inject bounce event")
-	}
-
-	// Invoke ses_events Lambda directly with a synthetic EventBridge Bounce event.
-	ctx := context.Background()
-	awsConf, err := awscfg.LoadDefaultConfig(ctx, awscfg.WithRegion(awsRegion))
-	if err != nil {
-		t.Fatalf("load AWS config: %v", err)
-	}
-	lambdaClient := lambdasdk.NewFromConfig(awsConf)
-	lambdaName := lambdaPrefix + "-ses-events"
-
-	payload := buildSQSEventWithEBPayload("Email Bounced", "ses-injected-"+uniqueName("id"), rfc5322MsgID)
-	resp, err := lambdaClient.Invoke(ctx, &lambdasdk.InvokeInput{
-		FunctionName: aws.String(lambdaName),
-		Payload:      payload,
-	})
-	if err != nil {
-		t.Fatalf("invoke %s: %v", lambdaName, err)
-	}
-	if resp.FunctionError != nil {
-		t.Fatalf("lambda function error: %s — %s", *resp.FunctionError, string(resp.Payload))
-	}
-
-	// Poll until message status transitions to "bounced".
-	ok := pollUntil(t, 15*time.Second, 1*time.Second, func() bool {
-		_, body, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
-		if err != nil {
-			return false
-		}
-		return str(body, "status") == "bounced"
-	})
-	if !ok {
-		_, body, _ := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
-		t.Fatalf("message status never reached 'bounced' after bounce event; current status: %s", str(body, "status"))
-	}
-}
-
-// TestSESEventsDelivery verifies that a delivery event sets the message status
-// to "sent". Uses the success simulator address so SES accepts the send.
-//
-// Requires: TEST_BASE_URL, TEST_API_KEY, TEST_LAMBDA_PREFIX, TEST_AWS_REGION
-func TestSESEventsDelivery(t *testing.T) {
-	c := newClient(t)
-	lambdaPrefix, awsRegion := requireLambdaEnv(t)
-
-	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("evtdelivery")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	mustCode(t, code, 201, body)
-	inboxID := mustStr(t, body, "id")
-	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
-
-	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
-		"to":        []map[string]any{{"email": "success@simulator.amazonses.com"}},
-		"subject":   "Delivery test " + uniqueName("subj"),
-		"body_text": "Integration test delivery event",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	mustCode(t, code, 201, body)
-	msgID := mustStr(t, body, "id")
-	threadID := mustStr(t, body, "thread_id")
-
-	code, body, err = c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	mustCode(t, code, 200, body)
-	rfc5322MsgID := str(body, "message_id")
-	if rfc5322MsgID == "" {
-		t.Skip("message has no message_id — cannot inject delivery event")
-	}
-
-	ctx := context.Background()
-	awsConf, err := awscfg.LoadDefaultConfig(ctx, awscfg.WithRegion(awsRegion))
-	if err != nil {
-		t.Fatalf("load AWS config: %v", err)
-	}
-	lambdaClient := lambdasdk.NewFromConfig(awsConf)
-	lambdaName := lambdaPrefix + "-ses-events"
-
-	payload := buildSQSEventWithEBPayload("Email Delivered", "ses-injected-"+uniqueName("id"), rfc5322MsgID)
-	resp, err := lambdaClient.Invoke(ctx, &lambdasdk.InvokeInput{
-		FunctionName: aws.String(lambdaName),
-		Payload:      payload,
-	})
-	if err != nil {
-		t.Fatalf("invoke %s: %v", lambdaName, err)
-	}
-	if resp.FunctionError != nil {
-		t.Fatalf("lambda function error: %s — %s", *resp.FunctionError, string(resp.Payload))
-	}
-
-	ok := pollUntil(t, 15*time.Second, 1*time.Second, func() bool {
-		_, body, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
-		if err != nil {
-			return false
-		}
-		return str(body, "status") == "sent"
-	})
-	if !ok {
-		_, body, _ := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
-		t.Fatalf("message status never reached 'sent' after delivery event; current status: %s", str(body, "status"))
-	}
-}
-
-// requireLambdaEnv returns TEST_LAMBDA_PREFIX and TEST_AWS_REGION, skipping
-// the test if either is missing.
-func requireLambdaEnv(t *testing.T) (lambdaPrefix, awsRegion string) {
-	t.Helper()
-	lambdaPrefix = os.Getenv("TEST_LAMBDA_PREFIX")
-	awsRegion = os.Getenv("TEST_AWS_REGION")
-	if lambdaPrefix == "" || awsRegion == "" {
-		t.Skip("TEST_LAMBDA_PREFIX and TEST_AWS_REGION must be set")
-	}
-	return lambdaPrefix, awsRegion
 }
