@@ -126,7 +126,7 @@ func TestSESEventsBounce(t *testing.T) {
 	lambdaClient := lambdasdk.NewFromConfig(awsConf)
 	lambdaName := lambdaPrefix + "-ses-events"
 
-	payload := buildSQSEventWithEBPayload("SES Bounce", "ses-injected-"+uniqueName("id"), rfc5322MsgID)
+	payload := buildSQSEventWithEBPayload("Email Bounced", "ses-injected-"+uniqueName("id"), rfc5322MsgID)
 	resp, err := lambdaClient.Invoke(ctx, &lambdasdk.InvokeInput{
 		FunctionName: aws.String(lambdaName),
 		Payload:      payload,
@@ -138,17 +138,17 @@ func TestSESEventsBounce(t *testing.T) {
 		t.Fatalf("lambda function error: %s — %s", *resp.FunctionError, string(resp.Payload))
 	}
 
-	// Poll until message status transitions to "failed".
+	// Poll until message status transitions to "bounced".
 	ok := pollUntil(t, 15*time.Second, 1*time.Second, func() bool {
 		_, body, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
 		if err != nil {
 			return false
 		}
-		return str(body, "status") == "failed"
+		return str(body, "status") == "bounced"
 	})
 	if !ok {
 		_, body, _ := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
-		t.Fatalf("message status never reached 'failed' after bounce event; current status: %s", str(body, "status"))
+		t.Fatalf("message status never reached 'bounced' after bounce event; current status: %s", str(body, "status"))
 	}
 }
 
@@ -198,7 +198,7 @@ func TestSESEventsDelivery(t *testing.T) {
 	lambdaClient := lambdasdk.NewFromConfig(awsConf)
 	lambdaName := lambdaPrefix + "-ses-events"
 
-	payload := buildSQSEventWithEBPayload("SES Message Delivery", "ses-injected-"+uniqueName("id"), rfc5322MsgID)
+	payload := buildSQSEventWithEBPayload("Email Delivered", "ses-injected-"+uniqueName("id"), rfc5322MsgID)
 	resp, err := lambdaClient.Invoke(ctx, &lambdasdk.InvokeInput{
 		FunctionName: aws.String(lambdaName),
 		Payload:      payload,

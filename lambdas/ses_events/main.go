@@ -51,10 +51,10 @@ type sesMail struct {
 
 // ebSESEvent is the EventBridge envelope for native SES events.
 // SES publishes to the default event bus with source "aws.ses".
-// detail-type is one of: "SES Bounce", "SES Complaint", "SES Message Delivery".
+// Official detail-type values: https://docs.aws.amazon.com/ses/latest/dg/monitoring-eventbridge.html
 type ebSESEvent struct {
-	DetailType string    `json:"detail-type"`
-	Detail     ebDetail  `json:"detail"`
+	DetailType string   `json:"detail-type"`
+	Detail     ebDetail `json:"detail"`
 }
 
 type ebDetail struct {
@@ -99,7 +99,20 @@ func processRecord(ctx context.Context, record events.SQSMessage) error {
 	}
 
 	switch evt.DetailType {
-	case "SES Bounce", "SES Complaint":
+	case "Email Bounced":
+		if pool == nil {
+			return fmt.Errorf("ses_events: database pool not initialised")
+		}
+		_, err := pool.Exec(ctx,
+			`UPDATE messages SET status = $1, updated_at = NOW() WHERE message_id_header = $2`,
+			string(models.MessageStatusBounced), rfc5322MsgID,
+		)
+		if err != nil {
+			return err
+		}
+		slog.Info("ses_events: marked message bounced", "message_id", rfc5322MsgID)
+
+	case "Email Complaint Received", "Email Rejected", "Email Rendering Failed":
 		if pool == nil {
 			return fmt.Errorf("ses_events: database pool not initialised")
 		}
@@ -111,7 +124,8 @@ func processRecord(ctx context.Context, record events.SQSMessage) error {
 			return err
 		}
 		slog.Info("ses_events: marked message failed", "type", evt.DetailType, "message_id", rfc5322MsgID)
-	case "SES Message Delivery":
+
+	case "Email Delivered":
 		if pool == nil {
 			return fmt.Errorf("ses_events: database pool not initialised")
 		}
@@ -124,8 +138,14 @@ func processRecord(ctx context.Context, record events.SQSMessage) error {
 			return err
 		}
 		slog.Info("ses_events: confirmed delivery", "message_id", rfc5322MsgID)
+
+	case "Email Delivery Delayed":
+		// Transient delay — SES will eventually send Email Delivered or Email Bounced.
+		// No status change; log for observability.
+		slog.Warn("ses_events: delivery delayed", "message_id", rfc5322MsgID)
+
 	default:
-		slog.Debug("ses_events: unknown detail-type, skipping", "detail-type", evt.DetailType)
+		slog.Debug("ses_events: unhandled detail-type, skipping", "detail-type", evt.DetailType)
 	}
 	return nil
 }

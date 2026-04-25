@@ -43,35 +43,57 @@ func sampleEventBridgeSESEvent(detailType, sesMessageID, rfc5322MsgID string) st
 }
 
 // TestEbSESEventUnmarshal verifies that the EventBridge envelope parses correctly
-// for each of the three SES detail-types.
+// for the official SES EventBridge detail-type strings.
+// Reference: https://docs.aws.amazon.com/ses/latest/dg/monitoring-eventbridge.html
 func TestEbSESEventUnmarshal(t *testing.T) {
 	cases := []struct {
-		detailType      string
-		sesMessageID    string
-		rfc5322MsgID    string
-		wantDetailType  string
-		wantRFC5322ID   string // after angle-bracket stripping
+		detailType     string
+		sesMessageID   string
+		rfc5322MsgID   string
+		wantDetailType string
+		wantRFC5322ID  string // after angle-bracket stripping
 	}{
 		{
-			detailType:    "SES Bounce",
-			sesMessageID:  "ses-abc123",
-			rfc5322MsgID:  "<bounce-test@mail.example.com>",
-			wantDetailType: "SES Bounce",
-			wantRFC5322ID: "bounce-test@mail.example.com",
+			detailType:     "Email Bounced",
+			sesMessageID:   "ses-abc123",
+			rfc5322MsgID:   "<bounce-test@mail.example.com>",
+			wantDetailType: "Email Bounced",
+			wantRFC5322ID:  "bounce-test@mail.example.com",
 		},
 		{
-			detailType:    "SES Complaint",
-			sesMessageID:  "ses-def456",
-			rfc5322MsgID:  "<complaint-test@mail.example.com>",
-			wantDetailType: "SES Complaint",
-			wantRFC5322ID: "complaint-test@mail.example.com",
+			detailType:     "Email Complaint Received",
+			sesMessageID:   "ses-def456",
+			rfc5322MsgID:   "<complaint-test@mail.example.com>",
+			wantDetailType: "Email Complaint Received",
+			wantRFC5322ID:  "complaint-test@mail.example.com",
 		},
 		{
-			detailType:    "SES Message Delivery",
-			sesMessageID:  "ses-ghi789",
-			rfc5322MsgID:  "<delivery-test@mail.example.com>",
-			wantDetailType: "SES Message Delivery",
-			wantRFC5322ID: "delivery-test@mail.example.com",
+			detailType:     "Email Delivered",
+			sesMessageID:   "ses-ghi789",
+			rfc5322MsgID:   "<delivery-test@mail.example.com>",
+			wantDetailType: "Email Delivered",
+			wantRFC5322ID:  "delivery-test@mail.example.com",
+		},
+		{
+			detailType:     "Email Rejected",
+			sesMessageID:   "ses-jkl012",
+			rfc5322MsgID:   "<rejected-test@mail.example.com>",
+			wantDetailType: "Email Rejected",
+			wantRFC5322ID:  "rejected-test@mail.example.com",
+		},
+		{
+			detailType:     "Email Rendering Failed",
+			sesMessageID:   "ses-mno345",
+			rfc5322MsgID:   "<rendering-failed@mail.example.com>",
+			wantDetailType: "Email Rendering Failed",
+			wantRFC5322ID:  "rendering-failed@mail.example.com",
+		},
+		{
+			detailType:     "Email Delivery Delayed",
+			sesMessageID:   "ses-pqr678",
+			rfc5322MsgID:   "<delayed-test@mail.example.com>",
+			wantDetailType: "Email Delivery Delayed",
+			wantRFC5322ID:  "delayed-test@mail.example.com",
 		},
 	}
 
@@ -118,7 +140,7 @@ func TestEbSESEventUnmarshal(t *testing.T) {
 // is silently skipped (returns nil) without touching the database.
 func TestProcessRecordNoMessageID(t *testing.T) {
 	body := map[string]any{
-		"detail-type": "SES Bounce",
+		"detail-type": "Email Bounced",
 		"detail": map[string]any{
 			"mail": map[string]any{
 				"messageId": "ses-noid",

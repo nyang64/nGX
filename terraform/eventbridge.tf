@@ -7,14 +7,23 @@
 # 2. scheduler_drafts — periodic job (rate 5m) to expire stale drafts.
 
 # ── SES Events ────────────────────────────────────────────────────────────────
+# Official EventBridge detail-type strings from:
+# https://docs.aws.amazon.com/ses/latest/dg/monitoring-eventbridge.html#supported-events
 
 resource "aws_cloudwatch_event_rule" "ses_events" {
   name        = "${local.prefix}-ses-events"
-  description = "Route SES bounce/complaint/delivery events to ses_events SQS queue"
+  description = "Route SES delivery status events to ses_events SQS queue"
 
   event_pattern = jsonencode({
     source      = ["aws.ses"]
-    detail-type = ["SES Bounce", "SES Complaint", "SES Message Delivery"]
+    detail-type = [
+      "Email Bounced",
+      "Email Complaint Received",
+      "Email Delivered",
+      "Email Rejected",
+      "Email Rendering Failed",
+      "Email Delivery Delayed",
+    ]
   })
 }
 
