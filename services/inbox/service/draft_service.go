@@ -222,7 +222,17 @@ func (s *DraftService) Get(ctx context.Context, claims *auth.Claims, draftID uui
 	err := dbpkg.WithOrgTx(ctx, s.pool, claims.OrgID, func(tx pgx.Tx) error {
 		var err error
 		draft, err = s.draftStore.GetByID(ctx, tx, claims.OrgID, draftID)
-		return err
+		if err != nil {
+			return err
+		}
+		atts, err := s.messageStore.ListDraftAttachments(ctx, tx, claims.OrgID, draftID)
+		if err != nil {
+			return err
+		}
+		for _, a := range atts {
+			draft.Attachments = append(draft.Attachments, *a)
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("get draft: %w", err)

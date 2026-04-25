@@ -48,6 +48,9 @@ type Draft struct {
 	// MessageID is populated once the draft has been sent.
 	MessageID *uuid.UUID `json:"message_id,omitempty" db:"message_id"`
 
+	// Attachments is populated when fetching a single draft (not in list views).
+	Attachments []Attachment `json:"attachments,omitempty" db:"-"`
+
 	Metadata  map[string]any `json:"metadata,omitempty"  db:"metadata"`
 	CreatedAt time.Time      `json:"created_at"          db:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"          db:"updated_at"`
