@@ -667,3 +667,134 @@ func TestCustomDomainProvisioning(t *testing.T) {
 		}
 	})
 }
+
+// TestThreadStatusTransitions verifies PATCH /threads/{id} status field transitions
+// and that the ?status= list filter correctly includes/excludes threads.
+func TestThreadStatusTransitions(t *testing.T) {
+	c := newClient(t)
+
+	// Create a dedicated inbox and send a message to get a thread.
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("tst")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
+		"to":        []map[string]any{{"email": "status-test@example.com"}},
+		"subject":   "Thread status test " + uniqueName("s"),
+		"body_text": "Testing thread status transitions",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	threadID := mustStr(t, body, "thread_id")
+	threadURL := fmt.Sprintf("/v1/inboxes/%s/threads/%s", inboxID, threadID)
+	listURL := fmt.Sprintf("/v1/inboxes/%s/threads", inboxID)
+
+	// Helper: assert thread appears in list filtered by given status.
+	assertInList := func(t *testing.T, status string, expectFound bool) {
+		t.Helper()
+		url := listURL
+		if status != "" {
+			url += "?status=" + status
+		}
+		code, body, err := c.get(url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		found := false
+		for _, th := range listOf(body, "threads") {
+			if str(asMap(th), "id") == threadID {
+				found = true
+				break
+			}
+		}
+		if found != expectFound {
+			if expectFound {
+				t.Errorf("expected thread in list with status=%q, but not found", status)
+			} else {
+				t.Errorf("expected thread absent from list with status=%q, but found", status)
+			}
+		}
+	}
+
+	t.Run("initial_status_is_open", func(t *testing.T) {
+		code, body, err := c.get(threadURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		if got := str(body, "status"); got != "open" {
+			t.Errorf("expected status=open, got %q", got)
+		}
+	})
+
+	t.Run("close_thread", func(t *testing.T) {
+		code, body, err := c.patch(threadURL, map[string]any{"status": "closed"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		if got := str(body, "status"); got != "closed" {
+			t.Errorf("expected status=closed, got %q", got)
+		}
+		// Closed thread should not appear in open list, but should in closed list.
+		assertInList(t, "open", false)
+		assertInList(t, "closed", true)
+	})
+
+	t.Run("mark_as_spam", func(t *testing.T) {
+		code, body, err := c.patch(threadURL, map[string]any{"status": "spam"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		if got := str(body, "status"); got != "spam" {
+			t.Errorf("expected status=spam, got %q", got)
+		}
+		assertInList(t, "open", false)
+		assertInList(t, "spam", true)
+	})
+
+	t.Run("move_to_trash", func(t *testing.T) {
+		code, body, err := c.patch(threadURL, map[string]any{"status": "trash"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		if got := str(body, "status"); got != "trash" {
+			t.Errorf("expected status=trash, got %q", got)
+		}
+		assertInList(t, "open", false)
+		assertInList(t, "trash", true)
+	})
+
+	t.Run("reopen_thread", func(t *testing.T) {
+		code, body, err := c.patch(threadURL, map[string]any{"status": "open"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		if got := str(body, "status"); got != "open" {
+			t.Errorf("expected status=open after reopen, got %q", got)
+		}
+		// Back to open — should appear in default (unfiltered) list.
+		assertInList(t, "", true)
+		assertInList(t, "open", true)
+	})
+
+	t.Run("invalid_status_rejected", func(t *testing.T) {
+		code, _, err := c.patch(threadURL, map[string]any{"status": "deleted"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("expected 400 for invalid status, got %d", code)
+		}
+	})
+}
