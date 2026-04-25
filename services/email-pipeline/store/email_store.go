@@ -208,7 +208,7 @@ func (s *EmailStore) CreateMessage(ctx context.Context, tx pgx.Tx, msg *models.M
 		msg.HtmlS3Key,
 		msg.RawS3Key,
 		msg.SizeBytes,
-		len(msg.Attachments) > 0,
+		msg.HasAttachments,
 		headersJSON,
 		metadataJSON,
 		msg.SentAt,

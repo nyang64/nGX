@@ -253,11 +253,12 @@ func processForRecipient(
 			TextS3Key:  textKey,
 			HtmlS3Key:  htmlKey,
 			RawS3Key:   rawS3Key,
-			SizeBytes:  int64(len(rawData)),
-			Headers:    hdrs,
-			ReceivedAt: &now,
-			CreatedAt:  now,
-			UpdatedAt:  now,
+			SizeBytes:      int64(len(rawData)),
+			Headers:        hdrs,
+			HasAttachments: len(attUploads) > 0,
+			ReceivedAt:     &now,
+			CreatedAt:      now,
+			UpdatedAt:      now,
 		}
 
 		if err := emailSt.CreateMessage(ctx, tx, message); err != nil {

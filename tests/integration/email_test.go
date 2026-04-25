@@ -10,6 +10,7 @@ package integration
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"strings"
@@ -198,6 +199,143 @@ func TestInboundEmail(t *testing.T) {
 			t.Fatalf("expected direction=inbound, got %s", str(msg, "direction"))
 		}
 	})
+}
+
+// TestInboundEmailWithAttachment verifies that an inbound multipart email with
+// a file attachment is stored correctly: the message has has_attachments=true.
+// Requires the same env vars as TestInboundEmail.
+func TestInboundEmailWithAttachment(t *testing.T) {
+	c := newClient(t)
+
+	bucketName := os.Getenv("TEST_S3_BUCKET_EMAILS")
+	lambdaPrefix := os.Getenv("TEST_LAMBDA_PREFIX")
+	awsRegion := os.Getenv("TEST_AWS_REGION")
+	if bucketName == "" || lambdaPrefix == "" || awsRegion == "" {
+		t.Skip("TEST_S3_BUCKET_EMAILS, TEST_LAMBDA_PREFIX, and TEST_AWS_REGION must be set")
+	}
+
+	addr := uniqueName("attin")
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": addr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	inboxEmail := str(body, "email")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+	subject := "Attachment test " + uniqueName("subj")
+	rawEML := buildMultipartEML("sender@example.com", inboxEmail, subject,
+		"Please find the report attached.", "report.txt", []byte("Q1 sales: $1,234,567"))
+
+	ctx := context.Background()
+	awsConf, err := awscfg.LoadDefaultConfig(ctx, awscfg.WithRegion(awsRegion))
+	if err != nil {
+		t.Fatalf("load AWS config: %v", err)
+	}
+	s3Client := s3sdk.NewFromConfig(awsConf)
+	s3Key := fmt.Sprintf("inbound/raw/%s.eml", uniqueName("att"))
+	_, err = s3Client.PutObject(ctx, &s3sdk.PutObjectInput{
+		Bucket:      aws.String(bucketName),
+		Key:         aws.String(s3Key),
+		Body:        bytes.NewReader(rawEML),
+		ContentType: aws.String("message/rfc822"),
+	})
+	if err != nil {
+		t.Fatalf("upload .eml to S3: %v", err)
+	}
+	t.Cleanup(func() {
+		s3Client.DeleteObject(ctx, &s3sdk.DeleteObjectInput{Bucket: aws.String(bucketName), Key: aws.String(s3Key)})
+	})
+
+	lambdaClient := lambdasdk.NewFromConfig(awsConf)
+	resp, err := lambdaClient.Invoke(ctx, &lambdasdk.InvokeInput{
+		FunctionName: aws.String(lambdaPrefix + "-email-inbound"),
+		Payload:      buildS3EventPayload(bucketName, s3Key),
+	})
+	if err != nil {
+		t.Fatalf("invoke email_inbound: %v", err)
+	}
+	if resp.FunctionError != nil {
+		t.Fatalf("lambda function error: %s — %s", *resp.FunctionError, string(resp.Payload))
+	}
+
+	// Poll until the message appears.
+	var msgID string
+	ok := pollUntil(t, 20*time.Second, 2*time.Second, func() bool {
+		_, body, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads", inboxID))
+		if err != nil {
+			return false
+		}
+		for _, th := range listOf(body, "threads") {
+			threadID := str(asMap(th), "id")
+			_, mb, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages", inboxID, threadID))
+			if err != nil {
+				return false
+			}
+			for _, m := range listOf(mb, "messages") {
+				if str(asMap(m), "direction") == "inbound" {
+					msgID = str(asMap(m), "id")
+					return true
+				}
+			}
+		}
+		return false
+	})
+	if !ok {
+		t.Fatal("inbound message with attachment never appeared in threads")
+	}
+
+	t.Run("has_attachments_true", func(t *testing.T) {
+		_, threads, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads", inboxID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		threadID := str(asMap(listOf(threads, "threads")[0]), "id")
+		_, mb, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages", inboxID, threadID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range listOf(mb, "messages") {
+			if str(asMap(m), "id") == msgID {
+				v, _ := asMap(m)["has_attachments"].(bool)
+				if !v {
+					t.Fatal("expected has_attachments=true for message with attachment")
+				}
+				return
+			}
+		}
+		t.Fatal("message not found in thread")
+	})
+}
+
+// buildMultipartEML constructs a multipart/mixed RFC 5322 email with a text
+// body and a single file attachment encoded as base64.
+func buildMultipartEML(from, to, subject, bodyText, filename string, attachment []byte) []byte {
+	boundary := "boundary_" + uniqueName("b")
+	encoded := base64.StdEncoding.EncodeToString(attachment)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "From: %s\r\n", from)
+	fmt.Fprintf(&b, "To: %s\r\n", to)
+	fmt.Fprintf(&b, "Subject: %s\r\n", subject)
+	fmt.Fprintf(&b, "Message-ID: <%s@test.example.com>\r\n", uniqueName("msgid"))
+	fmt.Fprintf(&b, "Date: %s\r\n", time.Now().UTC().Format(time.RFC1123Z))
+	fmt.Fprintf(&b, "MIME-Version: 1.0\r\n")
+	fmt.Fprintf(&b, "Content-Type: multipart/mixed; boundary=%q\r\n", boundary)
+	fmt.Fprintf(&b, "\r\n")
+	fmt.Fprintf(&b, "--%s\r\n", boundary)
+	fmt.Fprintf(&b, "Content-Type: text/plain; charset=utf-8\r\n")
+	fmt.Fprintf(&b, "\r\n")
+	fmt.Fprintf(&b, "%s\r\n", bodyText)
+	fmt.Fprintf(&b, "\r\n--%s\r\n", boundary)
+	fmt.Fprintf(&b, "Content-Type: text/plain; name=%q\r\n", filename)
+	fmt.Fprintf(&b, "Content-Disposition: attachment; filename=%q\r\n", filename)
+	fmt.Fprintf(&b, "Content-Transfer-Encoding: base64\r\n")
+	fmt.Fprintf(&b, "\r\n")
+	fmt.Fprintf(&b, "%s\r\n", encoded)
+	fmt.Fprintf(&b, "--%s--\r\n", boundary)
+	return []byte(b.String())
 }
 
 // buildTestEML constructs a minimal RFC 5322 email as raw bytes.

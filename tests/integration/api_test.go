@@ -398,6 +398,84 @@ func TestDrafts(t *testing.T) {
 	})
 }
 
+// TestDraftRejection verifies the draft reject flow:
+// create draft → reject with reason → draft status transitions to rejected.
+func TestDraftRejection(t *testing.T) {
+	c := newClient(t)
+
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("rej")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+	// Create a pending draft.
+	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/drafts", inboxID), map[string]any{
+		"to":        []map[string]any{{"email": "reject-test@example.com"}},
+		"subject":   "Draft to reject",
+		"body_text": "This draft will be rejected",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	draftID := mustStr(t, body, "id")
+	if str(body, "review_status") != "pending" {
+		t.Fatalf("expected review_status=pending, got %s", str(body, "review_status"))
+	}
+
+	// Reject the draft.
+	code, body, err = c.post(
+		fmt.Sprintf("/v1/inboxes/%s/drafts/%s/reject", inboxID, draftID),
+		map[string]any{"reason": "Content policy violation"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 200, body)
+
+	t.Run("status_is_rejected", func(t *testing.T) {
+		if str(body, "review_status") != "rejected" {
+			t.Fatalf("expected review_status=rejected after reject, got %s", str(body, "review_status"))
+		}
+	})
+
+	t.Run("get_returns_rejected_draft", func(t *testing.T) {
+		code, body, err := c.get(fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inboxID, draftID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		if str(body, "review_status") != "rejected" {
+			t.Fatalf("expected review_status=rejected on GET, got %s", str(body, "review_status"))
+		}
+	})
+
+	t.Run("rejected_draft_not_in_pending_list", func(t *testing.T) {
+		_, listBody, err := c.get(fmt.Sprintf("/v1/inboxes/%s/drafts?status=pending", inboxID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range listOf(listBody, "drafts") {
+			if str(asMap(d), "id") == draftID {
+				t.Fatal("rejected draft still appears in pending list")
+			}
+		}
+	})
+
+	t.Run("cannot_approve_rejected_draft", func(t *testing.T) {
+		code, _, err := c.post(fmt.Sprintf("/v1/inboxes/%s/drafts/%s/approve", inboxID, draftID), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code == 200 {
+			t.Fatal("expected approval to fail for a rejected draft, got 200")
+		}
+	})
+}
+
 // TestWebhookCRUD verifies webhook create/read/update/delete.
 func TestWebhookCRUD(t *testing.T) {
 	c := newClient(t)
