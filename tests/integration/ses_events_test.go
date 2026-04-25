@@ -96,7 +96,8 @@ func (e *sesTestEnv) injectSESEvent(t *testing.T, detailType, sesMessageID, rfc5
 }
 
 // sendAndResolveMessageID creates an outbound message and polls until
-// message_id_header is populated by the email_outbound Lambda.
+// email_outbound has fully processed it: message_id_header is populated AND
+// status has left "sending" (reached "sent" or a terminal state).
 // Returns inboxID, threadID, msgID, rfc5322MsgID.
 func sendAndResolveMessageID(t *testing.T, c *client, addrPrefix string) (inboxID, threadID, msgID, rfc5322MsgID string) {
 	t.Helper()
@@ -109,30 +110,43 @@ func sendAndResolveMessageID(t *testing.T, c *client, addrPrefix string) (inboxI
 	inboxID = mustStr(t, body, "id")
 	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
 
-	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
-		"to":        []map[string]any{{"email": "success@simulator.amazonses.com"}},
-		"subject":   "SES events test " + uniqueName("subj"),
-		"body_text": "Integration test — SES event injection",
-	})
-	if err != nil {
-		t.Fatal(err)
+	// Retry send up to 3 times to handle Lambda cold-start throttling.
+	var sendCode int
+	var sendBody map[string]any
+	for attempt := 0; attempt < 3; attempt++ {
+		sendCode, sendBody, err = c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
+			"to":        []map[string]any{{"email": "success@simulator.amazonses.com"}},
+			"subject":   "SES events test " + uniqueName("subj"),
+			"body_text": "Integration test — SES event injection",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sendCode == 201 {
+			break
+		}
+		if attempt < 2 {
+			time.Sleep(2 * time.Second)
+		}
 	}
-	mustCode(t, code, 201, body)
-	msgID = mustStr(t, body, "id")
-	threadID = mustStr(t, body, "thread_id")
+	mustCode(t, sendCode, 201, sendBody)
+	msgID = mustStr(t, sendBody, "id")
+	threadID = mustStr(t, sendBody, "thread_id")
 
-	// Wait for email_outbound to process: it populates message_id_header which
-	// ses_events Lambda uses to match the row.
-	ok := pollUntil(t, 30*time.Second, 2*time.Second, func() bool {
+	// Wait for email_outbound to fully process: message_id_header populated AND
+	// status no longer "sending". This gives us a stable baseline before injecting
+	// SES events, so "no status change" assertions aren't racing with email_outbound.
+	ok := pollUntil(t, 45*time.Second, 2*time.Second, func() bool {
 		_, b, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
 		if err != nil {
 			return false
 		}
 		rfc5322MsgID = str(b, "message_id")
-		return rfc5322MsgID != ""
+		status := str(b, "status")
+		return rfc5322MsgID != "" && status != "sending" && status != ""
 	})
 	if !ok {
-		t.Skip("message_id_header not populated after 30s — email_outbound may not be running")
+		t.Skip("message never left 'sending' after 45s — email_outbound may not be running")
 	}
 	return inboxID, threadID, msgID, rfc5322MsgID
 }
@@ -257,8 +271,6 @@ func TestSESEventsSQSInjection(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
 			inboxID, threadID, msgID, rfc5322MsgID := sendAndResolveMessageID(t, c, tc.addrPrefix)
 			statusBefore := messageStatus(t, c, inboxID, threadID, msgID)
 
@@ -269,13 +281,13 @@ func TestSESEventsSQSInjection(t *testing.T) {
 			)
 
 			if tc.wantStatus == "" {
-				// Email Delivery Delayed: no status change expected.
+				// Engagement/delayed events: no status change expected.
 				// Wait the poll window and assert status is unchanged.
 				time.Sleep(tc.pollTimeout)
 				statusAfter := messageStatus(t, c, inboxID, threadID, msgID)
 				if statusAfter != statusBefore {
-					t.Errorf("Email Delivery Delayed must not change status: was %q, got %q",
-						statusBefore, statusAfter)
+					t.Errorf("%s must not change status: was %q, got %q",
+						tc.detailType, statusBefore, statusAfter)
 				}
 				return
 			}
