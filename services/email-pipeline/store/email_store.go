@@ -431,7 +431,7 @@ func (s *EmailStore) GetAttachmentsByMessageID(ctx context.Context, orgID uuid.U
 func (s *EmailStore) UpdateMessageSentAt(ctx context.Context, tx pgx.Tx, messageID uuid.UUID, sentAt time.Time) error {
 	const query = `
 		UPDATE messages
-		SET status     = 'sent',
+		SET status     = CASE WHEN status = 'sending' THEN 'sent' ELSE status END,
 		    sent_at    = $2,
 		    updated_at = NOW()
 		WHERE id = $1`
