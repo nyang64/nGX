@@ -18,9 +18,10 @@ type EventType string
 
 const (
 	// Message events
-	EventMessageReceived EventType = "message.received"
-	EventMessageSent     EventType = "message.sent"
-	EventMessageBounced  EventType = "message.bounced"
+	EventMessageReceived   EventType = "message.received"
+	EventMessageSent       EventType = "message.sent"
+	EventMessageBounced    EventType = "message.bounced"
+	EventMessageEngagement EventType = "message.engagement"
 
 	// Thread events
 	EventThreadCreated       EventType = "thread.created"

@@ -591,6 +591,8 @@ resource "aws_lambda_function" "ses_events" {
     variables = merge(local.db_env, {
       WEBHOOK_DELIVERY_QUEUE_URL = aws_sqs_queue.webhook_delivery.url
       WS_DISPATCH_QUEUE_URL      = aws_sqs_queue.ws_dispatch.url
+      EMBEDDER_QUEUE_URL         = aws_sqs_queue.embedder.url
+      S3_BUCKET_EMAILS           = aws_s3_bucket.emails.id
     })
   }
 

@@ -246,6 +246,22 @@ type InboxCreatedData struct {
 	PodID        uuid.UUID `json:"pod_id"`
 }
 
+// MessageEngagementEvent is published when a recipient opens or clicks a tracked
+// link in an outbound message (requires SES engagement tracking enabled).
+type MessageEngagementEvent struct {
+	BaseEvent
+	Data MessageEngagementData `json:"data"`
+}
+
+// MessageEngagementData carries the full message snapshot plus engagement details.
+type MessageEngagementData struct {
+	MessagePayload
+	EngagementType string `json:"engagement_type"` // "opened" or "clicked"
+	LinkURL        string `json:"link_url,omitempty"`
+	IPAddress      string `json:"ip_address,omitempty"`
+	UserAgent      string `json:"user_agent,omitempty"`
+}
+
 // LabelAppliedEvent is published when a label is attached to a thread.
 type LabelAppliedEvent struct {
 	BaseEvent

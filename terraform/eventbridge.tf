@@ -23,6 +23,8 @@ resource "aws_cloudwatch_event_rule" "ses_events" {
       "Email Rejected",
       "Email Rendering Failed",
       "Email Delivery Delayed",
+      "Email Clicked",
+      "Email Opened",
     ]
   })
 }
