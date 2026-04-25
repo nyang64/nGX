@@ -464,6 +464,7 @@ func (s *DraftService) Approve(ctx context.Context, claims *auth.Claims, draftID
 			ReviewNote:   &note,
 			ReviewedAt:   &now,
 			ReviewedBy:   &reviewerID,
+			MessageID:    &msgID,
 		})
 		if err != nil {
 			return err

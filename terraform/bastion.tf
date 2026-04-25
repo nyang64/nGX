@@ -44,26 +44,42 @@ resource "aws_security_group" "bastion" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
-
-  egress {
-    description     = "PostgreSQL to RDS Proxy"
-    from_port       = 5432
-    to_port         = 5432
-    protocol        = "tcp"
-    security_groups = [aws_security_group.rds_proxy.id]
-  }
+  # PostgreSQL egress to RDS Proxy is managed via aws_security_group_rule below
+  # to avoid a circular SG dependency (rds_proxy ingress also references bastion).
 }
 
-# Allow bastion SG into RDS Proxy SG
+# ── Cross-SG rules (bastion ↔ RDS Proxy) ─────────────────────────────────────
+# Using aws_security_group_rule resources for both directions breaks the cycle
+# that would result from inline cross-SG egress/ingress blocks.
+
+resource "aws_security_group_rule" "bastion_to_rds_proxy" {
+  type                     = "egress"
+  description              = "PostgreSQL to RDS Proxy"
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.bastion.id
+  source_security_group_id = aws_security_group.rds_proxy.id
+}
 
 resource "aws_security_group_rule" "rds_proxy_from_bastion" {
   type                     = "ingress"
-  description              = "PostgreSQL from bastion"
+  description              = "PostgreSQL from bastion (SSM tunnel)"
   from_port                = 5432
   to_port                  = 5432
   protocol                 = "tcp"
   security_group_id        = aws_security_group.rds_proxy.id
   source_security_group_id = aws_security_group.bastion.id
+}
+
+resource "aws_security_group_rule" "rds_proxy_from_lambda" {
+  type                     = "ingress"
+  description              = "PostgreSQL from Lambda"
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.rds_proxy.id
+  source_security_group_id = aws_security_group.lambda.id
 }
 
 # ── AMI: latest Amazon Linux 2 ────────────────────────────────────────────────

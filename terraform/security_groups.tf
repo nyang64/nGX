@@ -27,13 +27,8 @@ resource "aws_security_group" "rds_proxy" {
   description = "RDS Proxy - accepts Postgres from Lambda SG, egress to Aurora"
   vpc_id      = aws_vpc.main.id
 
-  ingress {
-    description     = "PostgreSQL from Lambda"
-    from_port       = 5432
-    to_port         = 5432
-    protocol        = "tcp"
-    security_groups = [aws_security_group.lambda.id]
-  }
+  # Ingress rules are managed via aws_security_group_rule resources
+  # (in bastion.tf and lambda.tf) to avoid circular SG dependencies.
 
   egress {
     description = "Allow all outbound traffic"
