@@ -43,15 +43,29 @@ func TestMarshalUnmarshal_MessageReceived(t *testing.T) {
 	inboxID := uuid.New()
 	threadID := uuid.New()
 
+	now := time.Now().UTC().Truncate(time.Second)
 	orig := &MessageReceivedEvent{
 		BaseEvent: NewBase(EventMessageReceived, orgID),
 		Data: MessageReceivedData{
-			MessageID: "msg-001",
-			InboxID:   inboxID,
-			ThreadID:  threadID,
-			From:      "sender@example.com",
-			Subject:   "Hello",
-			RawS3Key:  "raw/msg-001",
+			MessagePayload: MessagePayload{
+				ID:        uuid.New().String(),
+				MessageID: "msg-001",
+				InboxID:   inboxID,
+				ThreadID:  threadID,
+				Direction: "inbound",
+				Status:    "received",
+				Subject:   "Hello",
+				From:      EmailAddress{Email: "sender@example.com", Name: "Sender"},
+				To:        []EmailAddress{{Email: "inbox@example.com"}},
+				Cc:        []EmailAddress{},
+				Bcc:       []EmailAddress{},
+				BodyText:  "Hello world",
+				Preview:   "Hello world",
+				Attachments: []AttachmentInfo{},
+				CreatedAt: now,
+				UpdatedAt: now,
+			},
+			RawS3Key: "raw/msg-001",
 		},
 	}
 
@@ -78,14 +92,17 @@ func TestMarshalUnmarshal_MessageReceived(t *testing.T) {
 	if evt.Data.ThreadID != orig.Data.ThreadID {
 		t.Errorf("ThreadID: want %v, got %v", orig.Data.ThreadID, evt.Data.ThreadID)
 	}
-	if evt.Data.From != orig.Data.From {
-		t.Errorf("From: want %q, got %q", orig.Data.From, evt.Data.From)
+	if evt.Data.From.Email != orig.Data.From.Email {
+		t.Errorf("From.Email: want %q, got %q", orig.Data.From.Email, evt.Data.From.Email)
 	}
 	if evt.Data.Subject != orig.Data.Subject {
 		t.Errorf("Subject: want %q, got %q", orig.Data.Subject, evt.Data.Subject)
 	}
 	if evt.Data.RawS3Key != orig.Data.RawS3Key {
 		t.Errorf("RawS3Key: want %q, got %q", orig.Data.RawS3Key, evt.Data.RawS3Key)
+	}
+	if evt.Data.BodyText != orig.Data.BodyText {
+		t.Errorf("BodyText: want %q, got %q", orig.Data.BodyText, evt.Data.BodyText)
 	}
 }
 
@@ -94,14 +111,28 @@ func TestMarshalUnmarshal_MessageSent(t *testing.T) {
 	inboxID := uuid.New()
 	threadID := uuid.New()
 
+	now := time.Now().UTC().Truncate(time.Second)
 	orig := &MessageSentEvent{
 		BaseEvent: NewBase(EventMessageSent, orgID),
 		Data: MessageSentData{
-			MessageID: "msg-002",
-			InboxID:   inboxID,
-			ThreadID:  threadID,
-			To:        []string{"a@example.com", "b@example.com"},
-			Subject:   "Re: Hello",
+			MessagePayload: MessagePayload{
+				ID:        uuid.New().String(),
+				MessageID: "msg-002",
+				InboxID:   inboxID,
+				ThreadID:  threadID,
+				Direction: "outbound",
+				Status:    "sent",
+				Subject:   "Re: Hello",
+				From:      EmailAddress{Email: "support@example.com", Name: "Support"},
+				To:        []EmailAddress{{Email: "a@example.com"}, {Email: "b@example.com"}},
+				Cc:        []EmailAddress{},
+				Bcc:       []EmailAddress{},
+				BodyText:  "Thanks for reaching out.",
+				Preview:   "Thanks for reaching out.",
+				Attachments: []AttachmentInfo{},
+				CreatedAt: now,
+				UpdatedAt: now,
+			},
 		},
 	}
 
@@ -126,12 +157,15 @@ func TestMarshalUnmarshal_MessageSent(t *testing.T) {
 		t.Errorf("To length: want %d, got %d", len(orig.Data.To), len(evt.Data.To))
 	}
 	for i := range orig.Data.To {
-		if evt.Data.To[i] != orig.Data.To[i] {
-			t.Errorf("To[%d]: want %q, got %q", i, orig.Data.To[i], evt.Data.To[i])
+		if evt.Data.To[i].Email != orig.Data.To[i].Email {
+			t.Errorf("To[%d].Email: want %q, got %q", i, orig.Data.To[i].Email, evt.Data.To[i].Email)
 		}
 	}
 	if evt.Data.Subject != orig.Data.Subject {
 		t.Errorf("Subject: want %q, got %q", orig.Data.Subject, evt.Data.Subject)
+	}
+	if evt.Data.BodyText != orig.Data.BodyText {
+		t.Errorf("BodyText: want %q, got %q", orig.Data.BodyText, evt.Data.BodyText)
 	}
 }
 
@@ -140,12 +174,26 @@ func TestMarshalUnmarshal_MessageBounced(t *testing.T) {
 	inboxID := uuid.New()
 	threadID := uuid.New()
 
+	now := time.Now().UTC().Truncate(time.Second)
 	orig := &MessageBouncedEvent{
 		BaseEvent: NewBase(EventMessageBounced, orgID),
 		Data: MessageBouncedData{
-			MessageID:    "msg-003",
-			InboxID:      inboxID,
-			ThreadID:     threadID,
+			MessagePayload: MessagePayload{
+				ID:        uuid.New().String(),
+				MessageID: "msg-003",
+				InboxID:   inboxID,
+				ThreadID:  threadID,
+				Direction: "outbound",
+				Status:    "bounced",
+				Subject:   "Invoice",
+				From:      EmailAddress{Email: "support@example.com"},
+				To:        []EmailAddress{{Email: "bad@example.com"}},
+				Cc:        []EmailAddress{},
+				Bcc:       []EmailAddress{},
+				Attachments: []AttachmentInfo{},
+				CreatedAt: now,
+				UpdatedAt: now,
+			},
 			BounceCode:   "550",
 			BounceReason: "Mailbox not found",
 		},
@@ -173,6 +221,9 @@ func TestMarshalUnmarshal_MessageBounced(t *testing.T) {
 	}
 	if evt.Data.BounceReason != orig.Data.BounceReason {
 		t.Errorf("BounceReason: want %q, got %q", orig.Data.BounceReason, evt.Data.BounceReason)
+	}
+	if evt.Data.Subject != orig.Data.Subject {
+		t.Errorf("Subject: want %q, got %q", orig.Data.Subject, evt.Data.Subject)
 	}
 }
 
@@ -283,21 +334,50 @@ func TestMarshal_RoundTrip(t *testing.T) {
 		&MessageReceivedEvent{
 			BaseEvent: NewBase(EventMessageReceived, orgID),
 			Data: MessageReceivedData{
-				MessageID: "m1", InboxID: inboxID, ThreadID: threadID,
-				From: "a@b.com", Subject: "s1", RawS3Key: "k1",
+				MessagePayload: MessagePayload{
+					ID: uuid.New().String(), MessageID: "m1",
+					InboxID: inboxID, ThreadID: threadID,
+					Direction: "inbound", Status: "received",
+					Subject: "s1",
+					From:    EmailAddress{Email: "a@b.com"},
+					To: []EmailAddress{{Email: "inbox@example.com"}},
+					Cc: []EmailAddress{}, Bcc: []EmailAddress{},
+					Attachments: []AttachmentInfo{},
+					CreatedAt: time.Now(), UpdatedAt: time.Now(),
+				},
+				RawS3Key: "k1",
 			},
 		},
 		&MessageSentEvent{
 			BaseEvent: NewBase(EventMessageSent, orgID),
 			Data: MessageSentData{
-				MessageID: "m2", InboxID: inboxID, ThreadID: threadID,
-				To: []string{"c@d.com"}, Subject: "s2",
+				MessagePayload: MessagePayload{
+					ID: uuid.New().String(), MessageID: "m2",
+					InboxID: inboxID, ThreadID: threadID,
+					Direction: "outbound", Status: "sent",
+					Subject: "s2",
+					From:    EmailAddress{Email: "support@example.com"},
+					To: []EmailAddress{{Email: "c@d.com"}},
+					Cc: []EmailAddress{}, Bcc: []EmailAddress{},
+					Attachments: []AttachmentInfo{},
+					CreatedAt: time.Now(), UpdatedAt: time.Now(),
+				},
 			},
 		},
 		&MessageBouncedEvent{
 			BaseEvent: NewBase(EventMessageBounced, orgID),
 			Data: MessageBouncedData{
-				MessageID: "m3", InboxID: inboxID, ThreadID: threadID,
+				MessagePayload: MessagePayload{
+					ID: uuid.New().String(), MessageID: "m3",
+					InboxID: inboxID, ThreadID: threadID,
+					Direction: "outbound", Status: "bounced",
+					Subject: "s3",
+					From:    EmailAddress{Email: "support@example.com"},
+					To: []EmailAddress{{Email: "bad@example.com"}},
+					Cc: []EmailAddress{}, Bcc: []EmailAddress{},
+					Attachments: []AttachmentInfo{},
+					CreatedAt: time.Now(), UpdatedAt: time.Now(),
+				},
 				BounceCode: "550", BounceReason: "no mailbox",
 			},
 		},

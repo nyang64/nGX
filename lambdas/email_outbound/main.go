@@ -148,11 +148,15 @@ func processRecord(ctx context.Context, record awsevents.SQSMessage) error {
 	}
 
 	// Load attachments from S3.
+	// modelAtts holds attachment metadata for the event payload.
+	var modelAtts []*models.Attachment
 	var attachments []attData
 	if msg.HasAttachments {
 		atts, err := emailSt.GetAttachmentsByMessageID(ctx, orgID, messageID)
 		if err != nil {
 			slog.Warn("email_outbound: load attachments", "message_id", messageID, "error", err)
+		} else {
+			modelAtts = atts
 		}
 		for _, att := range atts {
 			data, err := attachmentsS3.Download(ctx, att.S3Key)
@@ -202,12 +206,17 @@ func processRecord(ctx context.Context, record awsevents.SQSMessage) error {
 			if err := emailSt.UpdateMessageStatus(ctx, tx, messageID, models.MessageStatusFailed); err != nil {
 				return err
 			}
+			failedMsg := *msg
+			failedMsg.Status = models.MessageStatusFailed
+			failedMsg.UpdatedAt = now
 			_ = publisher.PublishEvent(ctx, &domainevents.MessageBouncedEvent{
 				BaseEvent: domainevents.NewBase(domainevents.EventMessageBounced, orgID),
 				Data: domainevents.MessageBouncedData{
-					MessageID:    messageID.String(),
-					InboxID:      msg.InboxID,
-					ThreadID:     msg.ThreadID,
+					MessagePayload: domainevents.MessagePayloadFromModel(
+						&failedMsg, bodyText, bodyHTML,
+						domainevents.BuildPreview(bodyText, 200),
+						derefAtts(modelAtts),
+					),
 					BounceCode:   "500",
 					BounceReason: sendErr.Error(),
 				},
@@ -218,14 +227,18 @@ func processRecord(ctx context.Context, record awsevents.SQSMessage) error {
 		if err := emailSt.UpdateMessageSentAt(ctx, tx, messageID, now); err != nil {
 			return err
 		}
+		sentMsg := *msg
+		sentMsg.Status = models.MessageStatusSent
+		sentMsg.SentAt = &now
+		sentMsg.UpdatedAt = now
 		_ = publisher.PublishEvent(ctx, &domainevents.MessageSentEvent{
 			BaseEvent: domainevents.NewBase(domainevents.EventMessageSent, orgID),
 			Data: domainevents.MessageSentData{
-				MessageID: messageID.String(),
-				InboxID:   msg.InboxID,
-				ThreadID:  msg.ThreadID,
-				Subject:   msg.Subject,
-				To:        toAddrs,
+				MessagePayload: domainevents.MessagePayloadFromModel(
+					&sentMsg, bodyText, bodyHTML,
+					domainevents.BuildPreview(bodyText, 200),
+					derefAtts(modelAtts),
+				),
 			},
 		})
 		return nil
@@ -357,4 +370,15 @@ func emailAddrsToStrings(addrs []models.EmailAddress) []string {
 
 func main() {
 	lambda.Start(handler)
+}
+
+// derefAtts converts a pointer slice to a value slice for event payload building.
+func derefAtts(atts []*models.Attachment) []models.Attachment {
+	out := make([]models.Attachment, 0, len(atts))
+	for _, a := range atts {
+		if a != nil {
+			out = append(out, *a)
+		}
+	}
+	return out
 }

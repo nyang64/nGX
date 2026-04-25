@@ -287,16 +287,24 @@ func processForRecipient(
 		return fmt.Errorf("db transaction: %w", err)
 	}
 
+	// Build attachment list for the event payload.
+	inboundAtts := make([]models.Attachment, 0, len(attUploads))
+	for _, a := range attUploads {
+		inboundAtts = append(inboundAtts, *a.model)
+	}
+
 	// Publish events.
 	if pubErr := publisher.PublishEvent(ctx, &domainevents.MessageReceivedEvent{
 		BaseEvent: domainevents.NewBase(domainevents.EventMessageReceived, inbox.OrgID),
 		Data: domainevents.MessageReceivedData{
-			MessageID: message.ID.String(),
-			InboxID:   inbox.ID,
-			ThreadID:  message.ThreadID,
-			From:      parsed.From.Email,
-			Subject:   parsed.Subject,
-			RawS3Key:  rawS3Key,
+			MessagePayload: domainevents.MessagePayloadFromModel(
+				message,
+				string(parsed.BodyText),
+				string(parsed.BodyHTML),
+				snippet,
+				inboundAtts,
+			),
+			RawS3Key: rawS3Key,
 		},
 	}); pubErr != nil {
 		slog.Error("email_inbound: publish MessageReceived", "message_id", msgID, "error", pubErr)

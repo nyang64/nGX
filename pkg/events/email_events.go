@@ -8,8 +8,130 @@
 package events
 
 import (
+	"strings"
+	"time"
+
 	"github.com/google/uuid"
+
+	"agentmail/pkg/models"
 )
+
+// ── Shared payload types ──────────────────────────────────────────────────────
+
+// EmailAddress is an email address with an optional display name.
+// Mirrors models.EmailAddress; defined here so event consumers do not need
+// to import the models package.
+type EmailAddress struct {
+	Email string `json:"email"`
+	Name  string `json:"name,omitempty"`
+}
+
+// AttachmentInfo carries attachment metadata in event payloads.
+// Binary content (S3Key) is intentionally excluded.
+type AttachmentInfo struct {
+	ID          string `json:"id"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	SizeBytes   int64  `json:"size_bytes"`
+	ContentID   string `json:"content_id,omitempty"`
+	Inline      bool   `json:"inline,omitempty"`
+}
+
+// MessagePayload is the full message snapshot embedded in every message event.
+// Consumers receive everything in one payload — no follow-up API call required.
+type MessagePayload struct {
+	ID        string    `json:"id"`
+	MessageID string    `json:"message_id"` // RFC 5322 Message-ID header value
+	InboxID   uuid.UUID `json:"inbox_id"`
+	ThreadID  uuid.UUID `json:"thread_id"`
+	Direction string    `json:"direction"`
+	Status    string    `json:"status"`
+
+	Subject string         `json:"subject"`
+	From    EmailAddress   `json:"from"`
+	To      []EmailAddress `json:"to"`
+	Cc      []EmailAddress `json:"cc"`
+	Bcc     []EmailAddress `json:"bcc"`
+	ReplyTo string         `json:"reply_to,omitempty"`
+
+	BodyText string `json:"body_text,omitempty"`
+	BodyHTML string `json:"body_html,omitempty"`
+	Preview  string `json:"preview,omitempty"`
+
+	Headers     map[string][]string `json:"headers,omitempty"`
+	Attachments []AttachmentInfo    `json:"attachments"`
+
+	SentAt     *time.Time `json:"sent_at,omitempty"`
+	ReceivedAt *time.Time `json:"received_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+// MessagePayloadFromModel builds a MessagePayload from a loaded message model
+// plus the resolved body content and attachments.
+// bodyText / bodyHTML are the decoded strings (already fetched from S3 or inline).
+// preview is a short plain-text snippet (use BuildPreview if not already computed).
+func MessagePayloadFromModel(
+	msg *models.Message,
+	bodyText, bodyHTML, preview string,
+	atts []models.Attachment,
+) MessagePayload {
+	p := MessagePayload{
+		ID:          msg.ID.String(),
+		MessageID:   msg.MessageID,
+		InboxID:     msg.InboxID,
+		ThreadID:    msg.ThreadID,
+		Direction:   string(msg.Direction),
+		Status:      string(msg.Status),
+		Subject:     msg.Subject,
+		From:        EmailAddress{Email: msg.From.Email, Name: msg.From.Name},
+		To:          convertAddrs(msg.To),
+		Cc:          convertAddrs(msg.Cc),
+		Bcc:         convertAddrs(msg.Bcc),
+		ReplyTo:     msg.ReplyTo,
+		BodyText:    bodyText,
+		BodyHTML:    bodyHTML,
+		Preview:     preview,
+		Headers:     msg.Headers,
+		Attachments: make([]AttachmentInfo, 0, len(atts)),
+		SentAt:      msg.SentAt,
+		ReceivedAt:  msg.ReceivedAt,
+		CreatedAt:   msg.CreatedAt,
+		UpdatedAt:   msg.UpdatedAt,
+	}
+	for _, a := range atts {
+		p.Attachments = append(p.Attachments, AttachmentInfo{
+			ID:          a.ID.String(),
+			Filename:    a.Filename,
+			ContentType: a.ContentType,
+			SizeBytes:   a.SizeBytes,
+			ContentID:   a.ContentID,
+			Inline:      a.Inline,
+		})
+	}
+	return p
+}
+
+// BuildPreview produces a short plain-text preview from a message body.
+func BuildPreview(text string, maxLen int) string {
+	s := strings.TrimSpace(text)
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", "")
+	if len(s) > maxLen {
+		return s[:maxLen]
+	}
+	return s
+}
+
+func convertAddrs(in []models.EmailAddress) []EmailAddress {
+	out := make([]EmailAddress, len(in))
+	for i, a := range in {
+		out[i] = EmailAddress{Email: a.Email, Name: a.Name}
+	}
+	return out
+}
+
+// ── Event types ───────────────────────────────────────────────────────────────
 
 // MessageReceivedEvent is published when an inbound email is stored.
 type MessageReceivedEvent struct {
@@ -17,46 +139,36 @@ type MessageReceivedEvent struct {
 	Data MessageReceivedData `json:"data"`
 }
 
+// MessageReceivedData carries the full inbound message snapshot.
+// RawS3Key is the S3 object key for the original RFC 5322 .eml file.
 type MessageReceivedData struct {
-	MessageID string    `json:"message_id"`
-	InboxID   uuid.UUID `json:"inbox_id"`
-	ThreadID  uuid.UUID `json:"thread_id"`
-	From      string    `json:"from"`
-	Subject   string    `json:"subject"`
-	// RawS3Key is the S3 object key for the raw RFC 5322 message.
-	RawS3Key string `json:"raw_s3_key"`
+	MessagePayload
+	RawS3Key string `json:"raw_s3_key,omitempty"`
 }
 
-// MessageSentEvent is published when an outbound message is delivered.
+// MessageSentEvent is published when an outbound message is accepted by SES.
 type MessageSentEvent struct {
 	BaseEvent
 	Data MessageSentData `json:"data"`
 }
 
+// MessageSentData carries the full outbound message snapshot.
 type MessageSentData struct {
-	MessageID string    `json:"message_id"`
-	InboxID   uuid.UUID `json:"inbox_id"`
-	ThreadID  uuid.UUID `json:"thread_id"`
-	To        []string  `json:"to"`
-	Subject   string    `json:"subject"`
-	// BodyText is the plain-text body of the message, included when the event
-	// is published at send time (before SES delivery) so the embedder can
-	// index outbound messages without requiring a separate S3 object.
-	BodyText string `json:"body_text,omitempty"`
+	MessagePayload
 }
 
-// MessageBouncedEvent is published when a delivery attempt results in a bounce.
+// MessageBouncedEvent is published when a delivery attempt results in a bounce
+// or when SES reports a complaint, rejection, or rendering failure.
 type MessageBouncedEvent struct {
 	BaseEvent
 	Data MessageBouncedData `json:"data"`
 }
 
+// MessageBouncedData carries the full message snapshot plus bounce details.
 type MessageBouncedData struct {
-	MessageID    string    `json:"message_id"`
-	InboxID      uuid.UUID `json:"inbox_id"`
-	ThreadID     uuid.UUID `json:"thread_id"`
-	BounceCode   string    `json:"bounce_code"`
-	BounceReason string    `json:"bounce_reason"`
+	MessagePayload
+	BounceCode   string `json:"bounce_code,omitempty"`
+	BounceReason string `json:"bounce_reason,omitempty"`
 }
 
 // ThreadCreatedEvent is published when a new thread is opened.
@@ -79,10 +191,10 @@ type ThreadStatusChangedEvent struct {
 }
 
 type ThreadStatusChangedData struct {
-	ThreadID   uuid.UUID `json:"thread_id"`
-	InboxID    uuid.UUID `json:"inbox_id"`
-	OldStatus  string    `json:"old_status"`
-	NewStatus  string    `json:"new_status"`
+	ThreadID  uuid.UUID `json:"thread_id"`
+	InboxID   uuid.UUID `json:"inbox_id"`
+	OldStatus string    `json:"old_status"`
+	NewStatus string    `json:"new_status"`
 }
 
 // DraftCreatedEvent is published when an agent queues a draft for review.
@@ -141,7 +253,7 @@ type LabelAppliedEvent struct {
 }
 
 type LabelAppliedData struct {
-	ThreadID uuid.UUID `json:"thread_id"`
-	LabelID  uuid.UUID `json:"label_id"`
-	LabelName string   `json:"label_name"`
+	ThreadID  uuid.UUID `json:"thread_id"`
+	LabelID   uuid.UUID `json:"label_id"`
+	LabelName string    `json:"label_name"`
 }

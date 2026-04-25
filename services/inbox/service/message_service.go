@@ -153,6 +153,7 @@ func (s *MessageService) Send(ctx context.Context, claims *auth.Claims, inboxID 
 
 	// Upload inline attachments to S3 before the transaction.
 	type attUpload struct {
+		id          uuid.UUID
 		s3Key       string
 		filename    string
 		contentType string
@@ -175,6 +176,7 @@ func (s *MessageService) Send(ctx context.Context, claims *auth.Claims, inboxID 
 			}
 		}
 		attUploads = append(attUploads, attUpload{
+			id:          uuid.New(),
 			s3Key:       key,
 			filename:    a.Filename,
 			contentType: ct,
@@ -280,7 +282,7 @@ func (s *MessageService) Send(ctx context.Context, claims *auth.Claims, inboxID 
 
 		for _, a := range attUploads {
 			att := &models.Attachment{
-				ID:          uuid.New(),
+				ID:          a.id,
 				OrgID:       claims.OrgID,
 				MessageID:   &msgID,
 				Filename:    a.filename,
@@ -325,22 +327,27 @@ func (s *MessageService) Send(ctx context.Context, claims *auth.Claims, inboxID 
 		return nil, fmt.Errorf("send message: %w", err)
 	}
 
-	// Publish MessageSentEvent immediately after DB insert so the embedder can
-	// index outbound messages without waiting for SES delivery confirmation.
-	// BodyText is included inline — no S3 object needed for outbound messages.
-	to := make([]string, len(req.To))
-	for i, a := range req.To {
-		to[i] = a.Email
+	// Publish MessageSentEvent immediately after DB insert so downstream consumers
+	// (embedder, webhooks) receive the full message snapshot without a follow-up call.
+	msgAtts := make([]models.Attachment, len(attUploads))
+	for i, a := range attUploads {
+		msgAtts[i] = models.Attachment{
+			ID:          a.id,
+			OrgID:       msg.OrgID,
+			MessageID:   &msg.ID,
+			Filename:    a.filename,
+			ContentType: a.contentType,
+			SizeBytes:   a.sizeBytes,
+			S3Key:       a.s3Key,
+			CreatedAt:   msg.CreatedAt,
+		}
 	}
 	_ = s.eventPublisher.PublishEvent(ctx, &events.MessageSentEvent{
 		BaseEvent: events.NewBase(events.EventMessageSent, msg.OrgID),
 		Data: events.MessageSentData{
-			MessageID: msg.ID.String(),
-			InboxID:   msg.InboxID,
-			ThreadID:  msg.ThreadID,
-			To:        to,
-			Subject:   msg.Subject,
-			BodyText:  req.BodyText,
+			MessagePayload: events.MessagePayloadFromModel(
+				msg, req.BodyText, req.BodyHTML, snippetFrom(req.BodyText), msgAtts,
+			),
 		},
 	})
 
