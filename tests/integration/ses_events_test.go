@@ -211,11 +211,12 @@ func TestSESEventsSQSInjection(t *testing.T) {
 	env := newSESTestEnv(t)
 
 	cases := []struct {
-		name           string
-		addrPrefix     string
-		detailType     string
-		wantStatus     string // "" means status must remain unchanged
-		pollTimeout    time.Duration
+		name          string
+		addrPrefix    string
+		detailType    string
+		wantStatus    string // "" means status must remain unchanged
+		wantEventType string // non-empty: assert a webhook delivery record with this event type appears
+		pollTimeout   time.Duration
 	}{
 		{
 			name:        "Email Bounced → bounced",
@@ -249,22 +250,24 @@ func TestSESEventsSQSInjection(t *testing.T) {
 			name:        "Email Delivery Delayed → no status change",
 			addrPrefix:  "ses-delayed",
 			detailType:  "Email Delivery Delayed",
-			wantStatus:  "", // log-only; status must remain unchanged
+			wantStatus:  "", // log-only; status must remain unchanged, no event published
 			pollTimeout: 10 * time.Second,
 		},
 		{
-			name:        "Email Opened → no status change",
-			addrPrefix:  "ses-opened",
-			detailType:  "Email Opened",
-			wantStatus:  "", // engagement signal only; no status transition
-			pollTimeout: 10 * time.Second,
+			name:          "Email Opened → no status change + engagement event dispatched",
+			addrPrefix:    "ses-opened",
+			detailType:    "Email Opened",
+			wantStatus:    "",                  // engagement signal only; no status transition
+			wantEventType: "message.engagement", // must reach the webhook dispatcher
+			pollTimeout:   10 * time.Second,
 		},
 		{
-			name:        "Email Clicked → no status change",
-			addrPrefix:  "ses-clicked",
-			detailType:  "Email Clicked",
-			wantStatus:  "", // engagement signal only; no status transition
-			pollTimeout: 10 * time.Second,
+			name:          "Email Clicked → no status change + engagement event dispatched",
+			addrPrefix:    "ses-clicked",
+			detailType:    "Email Clicked",
+			wantStatus:    "",                  // engagement signal only; no status transition
+			wantEventType: "message.engagement", // must reach the webhook dispatcher
+			pollTimeout:   10 * time.Second,
 		},
 	}
 
@@ -274,6 +277,25 @@ func TestSESEventsSQSInjection(t *testing.T) {
 			inboxID, threadID, msgID, rfc5322MsgID := sendAndResolveMessageID(t, c, tc.addrPrefix)
 			statusBefore := messageStatus(t, c, inboxID, threadID, msgID)
 
+			// For events that publish a domain event, register a webhook before
+			// injecting so the dispatcher has a delivery target. The webhook is
+			// created now (before injection) so it exists when the dispatcher Lambda
+			// runs asynchronously after ses_events processes the SQS message.
+			var engagementWebhookID string
+			if tc.wantEventType != "" {
+				whCode, whBody, whErr := c.post("/v1/webhooks", map[string]any{
+					"url":       "https://httpbin.org/post",
+					"events":    []string{tc.wantEventType},
+					"is_active": true,
+				})
+				if whErr != nil {
+					t.Fatal(whErr)
+				}
+				mustCode(t, whCode, 201, whBody)
+				engagementWebhookID = mustStr(t, whBody, "id")
+				t.Cleanup(func() { c.delete("/v1/webhooks/" + engagementWebhookID) }) //nolint
+			}
+
 			env.injectSESEvent(t,
 				tc.detailType,
 				"ses-injected-"+uniqueName("id"),
@@ -281,9 +303,33 @@ func TestSESEventsSQSInjection(t *testing.T) {
 			)
 
 			if tc.wantStatus == "" {
-				// Engagement/delayed events: no status change expected.
-				// Wait the poll window and assert status is unchanged.
-				time.Sleep(tc.pollTimeout)
+				if engagementWebhookID != "" {
+					// Engagement events: verify the dispatcher delivered (or attempted)
+					// the event by polling for a webhook delivery record. This exercises
+					// the full pipeline: ses_events → SQS → dispatcher → webhook.
+					ok := pollUntil(t, 30*time.Second, 2*time.Second, func() bool {
+						_, dlvBody, err := c.get("/v1/webhooks/" + engagementWebhookID + "/deliveries")
+						if err != nil {
+							return false
+						}
+						for _, d := range listOf(dlvBody, "deliveries") {
+							if str(asMap(d), "event_type") == tc.wantEventType {
+								return true
+							}
+						}
+						return false
+					})
+					if !ok {
+						t.Fatalf("%s: no webhook delivery record for event_type=%q within 30s",
+							tc.detailType, tc.wantEventType)
+					}
+				} else {
+					// Log-only events (e.g. Delivery Delayed): no domain event is
+					// published, so just wait out the window.
+					time.Sleep(tc.pollTimeout)
+				}
+
+				// In both branches, message status must remain unchanged.
 				statusAfter := messageStatus(t, c, inboxID, threadID, msgID)
 				if statusAfter != statusBefore {
 					t.Errorf("%s must not change status: was %q, got %q",

@@ -39,6 +39,9 @@ func Unmarshal(data []byte) (Event, error) {
 	case EventMessageBounced:
 		var e MessageBouncedEvent
 		return &e, json.Unmarshal(data, &e)
+	case EventMessageEngagement:
+		var e MessageEngagementEvent
+		return &e, json.Unmarshal(data, &e)
 	case EventThreadCreated:
 		var e ThreadCreatedEvent
 		return &e, json.Unmarshal(data, &e)
