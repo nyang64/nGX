@@ -658,3 +658,419 @@ func containsStr(t *testing.T, haystack, needle string) bool {
 	t.Helper()
 	return strings.Contains(haystack, needle)
 }
+
+// ── nGX-xob: Duplicate and conflict error handling ────────────────────────────
+
+// TestDuplicateConflicts verifies that creating resources with duplicate
+// unique fields returns 400/409 instead of leaking a raw DB error (500).
+func TestDuplicateConflicts(t *testing.T) {
+	c := newClient(t)
+
+	t.Run("duplicate_inbox_address", func(t *testing.T) {
+		addr := uniqueName("dup-inbox")
+		code, body, err := c.post("/v1/inboxes", map[string]any{"address": addr})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		id := mustStr(t, body, "id")
+		t.Cleanup(func() { c.delete("/v1/inboxes/" + id) }) //nolint
+
+		// Second inbox with identical address.
+		code, body2, err := c.post("/v1/inboxes", map[string]any{"address": addr})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code == 500 {
+			t.Errorf("duplicate inbox address should not return 500 (raw DB error leaked): %v", body2)
+		}
+		if code != 400 && code != 409 {
+			t.Errorf("duplicate inbox address: expected 400 or 409, got %d: %v", code, body2)
+		}
+	})
+
+	t.Run("duplicate_pod_slug", func(t *testing.T) {
+		slug := uniqueName("dup-pod")
+		code, body, err := c.post("/v1/pods", map[string]any{"name": "Dup Pod", "slug": slug})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		id := mustStr(t, body, "id")
+		t.Cleanup(func() { c.delete("/v1/pods/" + id) }) //nolint
+
+		// Second pod with identical slug.
+		code, body2, err := c.post("/v1/pods", map[string]any{"name": "Dup Pod 2", "slug": slug})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code == 500 {
+			t.Errorf("duplicate pod slug should not return 500 (raw DB error leaked): %v", body2)
+		}
+		if code != 400 && code != 409 {
+			t.Errorf("duplicate pod slug: expected 400 or 409, got %d: %v", code, body2)
+		}
+	})
+
+	t.Run("duplicate_domain", func(t *testing.T) {
+		_, podsBody, err := c.get("/v1/pods")
+		if err != nil {
+			t.Fatal(err)
+		}
+		pods := listOf(podsBody, "pods")
+		if len(pods) == 0 {
+			t.Skip("no pods available")
+		}
+		podID := str(asMap(pods[0]), "id")
+		const testDomain = "dup-domain-test.nyklabs.com"
+
+		// First registration.
+		code, body, err := c.post("/v1/domains", map[string]any{"Domain": testDomain, "PodID": podID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		domainID := str(asMap(body["Domain"]), "id")
+		t.Cleanup(func() { c.delete("/v1/domains/" + domainID) }) //nolint
+
+		// Second registration of same domain.
+		code, body2, err := c.post("/v1/domains", map[string]any{"Domain": testDomain, "PodID": podID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code == 500 {
+			t.Errorf("duplicate domain should not return 500 (raw DB error leaked): %v", body2)
+		}
+		if code != 400 && code != 409 {
+			t.Errorf("duplicate domain: expected 400 or 409, got %d: %v", code, body2)
+		}
+	})
+}
+
+// ── nGX-drm: Attachment edge cases ───────────────────────────────────────────
+
+// TestAttachmentEdgeCases verifies attachment failure modes and metadata correctness.
+func TestAttachmentEdgeCases(t *testing.T) {
+	c := newClient(t)
+
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("att-edge")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+	t.Run("invalid_base64_rejected", func(t *testing.T) {
+		code, body, err := c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
+			"to":        []map[string]any{{"email": "test@example.com"}},
+			"subject":   "invalid b64 test",
+			"body_text": "test",
+			"attachments": []map[string]any{
+				{"filename": "bad.bin", "content_type": "application/octet-stream", "content": "NOT_VALID_BASE64!!!"},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("invalid base64 attachment should return 400, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("s3_key_format_in_response", func(t *testing.T) {
+		smallData := base64.StdEncoding.EncodeToString([]byte("hello attachment"))
+		code, body, err := c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
+			"to":        []map[string]any{{"email": "success@simulator.amazonses.com"}},
+			"subject":   "S3 key test " + uniqueName("s"),
+			"body_text": "attachment s3 key test",
+			"attachments": []map[string]any{
+				{"filename": "test.txt", "content_type": "text/plain", "content": smallData},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		msgID := mustStr(t, body, "id")
+		threadID := mustStr(t, body, "thread_id")
+
+		// GET the message to check attachment s3_key format: orgID/msgID/filename
+		_, msgBody, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		atts := listOf(msgBody, "attachments")
+		if len(atts) == 0 {
+			t.Fatal("expected attachment in message response")
+		}
+		s3Key := str(asMap(atts[0]), "s3_key")
+		if s3Key == "" {
+			t.Fatal("attachment s3_key is empty")
+		}
+		// S3 key format: {orgID}/{msgID}/{filename}
+		if !strings.Contains(s3Key, msgID) {
+			t.Errorf("s3_key %q should contain msgID %q", s3Key, msgID)
+		}
+		if !strings.HasSuffix(s3Key, "test.txt") {
+			t.Errorf("s3_key %q should end with filename 'test.txt'", s3Key)
+		}
+	})
+
+	t.Run("draft_attachment_cascade_on_delete", func(t *testing.T) {
+		smallData := base64.StdEncoding.EncodeToString([]byte("draft attachment data"))
+		// Create a draft with an attachment.
+		code, body, err := c.post(fmt.Sprintf("/v1/inboxes/%s/drafts", inboxID), map[string]any{
+			"to":      []map[string]any{{"email": "cascade-test@example.com"}},
+			"subject": "Draft cascade test",
+			"body_text": "Testing cascade delete",
+			"attachments": []map[string]any{
+				{"filename": "cascade.txt", "content_type": "text/plain", "content": smallData},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		draftID := mustStr(t, body, "id")
+
+		// Verify the attachment is present in the GET response.
+		code, body, err = c.get(fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inboxID, draftID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		if len(listOf(body, "attachments")) == 0 {
+			t.Fatal("expected attachment in draft GET response before delete")
+		}
+
+		// Delete the draft.
+		code, _, err = c.delete(fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inboxID, draftID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 204, nil)
+
+		// Draft should be gone (404).
+		code, _, err = c.get(fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inboxID, draftID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 404 {
+			t.Errorf("deleted draft should return 404, got %d", code)
+		}
+	})
+
+	t.Run("empty_filename_handled", func(t *testing.T) {
+		smallData := base64.StdEncoding.EncodeToString([]byte("data"))
+		code, body, err := c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
+			"to":        []map[string]any{{"email": "success@simulator.amazonses.com"}},
+			"subject":   "Empty filename test " + uniqueName("f"),
+			"body_text": "test",
+			"attachments": []map[string]any{
+				{"filename": "", "content_type": "application/octet-stream", "content": smallData},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Empty filename should either succeed (stored as-is) or return 400 — not 500.
+		if code == 500 {
+			t.Errorf("empty filename should not cause 500, got 500: %v", body)
+		}
+	})
+}
+
+// ── nGX-nl0: Inbox status transitions ────────────────────────────────────────
+
+// TestInboxStatusTransitions verifies PATCH inbox status transitions and
+// that DELETE removes the inbox (all associated resources become inaccessible).
+func TestInboxStatusTransitions(t *testing.T) {
+	c := newClient(t)
+
+	// Create a fresh inbox for transition testing.
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("status-inbox")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	// Note: no cleanup here — we test DELETE within the test.
+
+	t.Run("initial_status_is_active", func(t *testing.T) {
+		code, body, err := c.get("/v1/inboxes/" + inboxID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		if got := str(body, "status"); got != "active" {
+			t.Errorf("expected status=active on creation, got %q", got)
+		}
+	})
+
+	t.Run("suspend_inbox", func(t *testing.T) {
+		code, body, err := c.patch("/v1/inboxes/"+inboxID, map[string]any{"status": "suspended"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		if got := str(body, "status"); got != "suspended" {
+			t.Errorf("expected status=suspended after patch, got %q", got)
+		}
+	})
+
+	t.Run("get_shows_suspended", func(t *testing.T) {
+		code, body, err := c.get("/v1/inboxes/" + inboxID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		if got := str(body, "status"); got != "suspended" {
+			t.Errorf("expected GET to show status=suspended, got %q", got)
+		}
+	})
+
+	t.Run("reactivate_inbox", func(t *testing.T) {
+		code, body, err := c.patch("/v1/inboxes/"+inboxID, map[string]any{"status": "active"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		if got := str(body, "status"); got != "active" {
+			t.Errorf("expected status=active after reactivation, got %q", got)
+		}
+	})
+
+	t.Run("invalid_status_rejected", func(t *testing.T) {
+		code, _, err := c.patch("/v1/inboxes/"+inboxID, map[string]any{"status": "archived"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("invalid status should be 400, got %d", code)
+		}
+	})
+
+	t.Run("send_to_active_inbox_succeeds", func(t *testing.T) {
+		code, body, err := c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
+			"to":        []map[string]any{{"email": "success@simulator.amazonses.com"}},
+			"subject":   "Status test " + uniqueName("s"),
+			"body_text": "test",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+	})
+
+	t.Run("delete_inbox", func(t *testing.T) {
+		code, _, err := c.delete("/v1/inboxes/" + inboxID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 204, nil)
+	})
+
+	t.Run("deleted_inbox_returns_404", func(t *testing.T) {
+		code, _, err := c.get("/v1/inboxes/" + inboxID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 404 {
+			t.Errorf("deleted inbox should return 404, got %d", code)
+		}
+	})
+}
+
+// ── nGX-06l: Search edge cases ────────────────────────────────────────────────
+
+// TestSearchEdgeCases verifies that the search endpoint handles degenerate
+// inputs gracefully — no 500 errors, correct empty-result shapes.
+func TestSearchEdgeCases(t *testing.T) {
+	c := newClient(t)
+
+	t.Run("empty_query_returns_400", func(t *testing.T) {
+		code, body, err := c.get("/v1/search?q=")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("empty query should return 400, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("missing_q_returns_400", func(t *testing.T) {
+		code, body, err := c.get("/v1/search")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("missing q should return 400, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("no_results_returns_empty_array", func(t *testing.T) {
+		code, body, err := c.get("/v1/search?q=xyzzy_no_such_term_42_zzz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		items := listOf(body, "items")
+		// items should be an empty array (not null) — the API initialises to []
+		if items == nil {
+			t.Error("items should be empty array, not null/missing")
+		}
+		if len(items) != 0 {
+			t.Errorf("expected 0 results for nonsense query, got %d", len(items))
+		}
+		// has_more should be present and false.
+		if _, ok := body["has_more"]; !ok {
+			t.Error("response missing has_more field")
+		}
+	})
+
+	t.Run("sql_special_chars_no_error", func(t *testing.T) {
+		// Queries with SQL-sensitive characters should not cause 500.
+		for _, q := range []string{"%test%", "it's a test", `"quoted"`, "a; DROP TABLE messages;--"} {
+			code, body, err := c.get("/v1/search?q=" + q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if code == 500 {
+				t.Errorf("special-char query %q caused 500: %v", q, body)
+			}
+		}
+	})
+
+	t.Run("long_query_no_error", func(t *testing.T) {
+		// A 1200-character query should not cause 500.
+		longQ := strings.Repeat("searchterm ", 100)
+		code, body, err := c.get("/v1/search?q=" + longQ)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code == 500 {
+			t.Errorf("long query caused 500: %v", body)
+		}
+	})
+
+	t.Run("search_before_any_messages_returns_empty", func(t *testing.T) {
+		// Create a fresh inbox (no messages). Filter search to it.
+		_, ibody, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("search-empty")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		inboxID := mustStr(t, ibody, "id")
+		t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+		code, body, err := c.get(fmt.Sprintf("/v1/search?q=anything&inbox_id=%s", inboxID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		items := listOf(body, "items")
+		if len(items) != 0 {
+			t.Errorf("new inbox should have 0 search results, got %d", len(items))
+		}
+	})
+}

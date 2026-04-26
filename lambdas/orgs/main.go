@@ -122,6 +122,9 @@ func createPod(ctx context.Context, event events.APIGatewayProxyRequest, claims 
 		UpdatedAt:   time.Now().UTC(),
 	}
 	if err := insertPod(ctx, pod); err != nil {
+		if dbpkg.IsDuplicateKey(err) {
+			return shared.Error(409, "pod with this slug already exists"), nil
+		}
 		return shared.Error(500, "failed to create pod"), nil
 	}
 	return shared.JSON(201, pod), nil
