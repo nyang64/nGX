@@ -101,12 +101,12 @@ migrate-reset: ## Roll back ALL migrations (destructive)
 .PHONY: test
 test: ## Run unit tests across pkg/ and lambdas/
 	@echo "Running tests..."
-	go test -race -count=1 ./pkg/... ./lambdas/...
+	DATABASE_URL= go test -race -count=1 ./pkg/... ./lambdas/...
 
 .PHONY: test-integration
 test-integration: ## Run integration tests against the deployed AWS stack (requires source loadenv.sh first)
 	@echo "Running integration tests..."
-	go test -race -count=1 -v -timeout 120s ./tests/integration/...
+	go test -race -count=1 -v -timeout 300s ./tests/integration/...
 
 .PHONY: test-coverage
 test-coverage: ## Run unit tests with HTML coverage report

@@ -52,13 +52,28 @@ bd close <id>         # Complete work
 
 ## Build & Test
 
-_Add your build and test commands here_
+**MANDATORY RULE: Always run tests before `git commit` and `git push`. No exceptions.**
 
 ```bash
-# Example:
-# npm install
-# npm test
+# Unit tests (run once — no loadenv needed; DATABASE_URL is unset by the target)
+make test
+
+# Integration tests (run TWICE — catches flakiness; requires source loadenv.sh first)
+source loadenv.sh && make test-integration
+source loadenv.sh && make test-integration
+
+# Then commit and push
+git add <files>
+git commit -m "..."
+git pull --rebase && git push
 ```
+
+Integration tests require `TEST_BASE_URL`, `TEST_API_KEY`, `TEST_LAMBDA_PREFIX`, and
+`TEST_AWS_REGION` — all sourced from `.env.outputs` via `loadenv.sh`.
+
+Unit tests must NOT have `DATABASE_URL` set — `ses_events/init()` skips DB init when
+it's empty, which is correct for unit tests (tests set `pool = nil` themselves). The
+`make test` target enforces this with `DATABASE_URL=`.
 
 ## Architecture Overview
 
