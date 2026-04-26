@@ -90,9 +90,9 @@ func processRecord(ctx context.Context, record events.SQSMessage) error {
 	var inlineBody string // non-empty for outbound messages (body carried in event)
 	switch e := evt.(type) {
 	case *domainevents.MessageReceivedEvent:
-		msgIDStr = e.Data.MessageID
+		msgIDStr = e.Data.ID
 	case *domainevents.MessageSentEvent:
-		msgIDStr = e.Data.MessageID
+		msgIDStr = e.Data.ID
 		inlineBody = e.Data.BodyText
 	default:
 		return nil
