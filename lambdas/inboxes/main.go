@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"agentmail/lambdas/shared"
+	authpkg "agentmail/pkg/auth"
 	"agentmail/pkg/models"
 	sqspkg "agentmail/pkg/sqs"
 	inboxsvc "agentmail/services/inbox/service"
@@ -57,6 +58,9 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 	case "/v1/inboxes":
 		switch event.HTTPMethod {
 		case "GET":
+			if !claims.HasScope(authpkg.ScopeInboxRead) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
 			inboxes, _, err := inboxSv.List(ctx, claims, claims.PodID, 50, event.QueryStringParameters["cursor"])
 			if err != nil {
 				return shared.Error(500, err.Error()), nil
@@ -66,6 +70,9 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			}
 			return shared.JSON(200, map[string]any{"inboxes": inboxes}), nil
 		case "POST":
+			if !claims.HasScope(authpkg.ScopeInboxWrite) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
 			var req inboxsvc.CreateInboxRequest
 			if err := shared.Decode(event, &req); err != nil {
 				return shared.Error(400, "invalid request body"), nil
@@ -84,12 +91,18 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 		}
 		switch event.HTTPMethod {
 		case "GET":
+			if !claims.HasScope(authpkg.ScopeInboxRead) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
 			inbox, err := inboxSv.Get(ctx, claims, inboxID)
 			if err != nil {
 				return shared.Error(404, "inbox not found"), nil
 			}
 			return shared.JSON(200, inbox), nil
 		case "PATCH":
+			if !claims.HasScope(authpkg.ScopeInboxWrite) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
 			var req inboxsvc.UpdateInboxRequest
 			if err := shared.Decode(event, &req); err != nil {
 				return shared.Error(400, "invalid request body"), nil
@@ -100,6 +113,9 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			}
 			return shared.JSON(200, inbox), nil
 		case "DELETE":
+			if !claims.HasScope(authpkg.ScopeInboxWrite) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
 			if err := inboxSv.Delete(ctx, claims, inboxID); err != nil {
 				return shared.Error(404, "inbox not found"), nil
 			}

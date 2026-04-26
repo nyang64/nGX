@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"agentmail/pkg/auth"
@@ -142,8 +143,32 @@ func (s *MessageService) Get(ctx context.Context, claims *auth.Claims, messageID
 	return msg, nil
 }
 
+const maxAttachmentBytes = 10 * 1024 * 1024 // 10 MiB
+
 // Send creates an outbound message and publishes it to the email outbound queue.
 func (s *MessageService) Send(ctx context.Context, claims *auth.Claims, inboxID uuid.UUID, req SendMessageRequest) (*models.Message, error) {
+	// Input validation.
+	if len(req.To) == 0 {
+		return nil, fmt.Errorf("to is required")
+	}
+	for _, addr := range req.To {
+		if addr.Email == "" || !strings.Contains(addr.Email, "@") {
+			return nil, fmt.Errorf("invalid email address: %q", addr.Email)
+		}
+	}
+	if req.BodyText == "" && req.BodyHTML == "" {
+		return nil, fmt.Errorf("body_text or body_html is required")
+	}
+	for _, a := range req.Attachments {
+		data, err := base64.StdEncoding.DecodeString(a.Content)
+		if err != nil {
+			return nil, fmt.Errorf("decode attachment %q: %w", a.Filename, err)
+		}
+		if int64(len(data)) > maxAttachmentBytes {
+			return nil, fmt.Errorf("attachment %q exceeds 10 MiB limit", a.Filename)
+		}
+	}
+
 	var msg *models.Message
 	now := time.Now().UTC()
 

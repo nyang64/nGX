@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 
@@ -62,15 +63,23 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 		if event.HTTPMethod != "GET" {
 			break
 		}
-		q := inboxstore.ThreadListQuery{InboxID: inboxID, Limit: 50, Cursor: event.QueryStringParameters["cursor"]}
+		limit := 0
+		if l := event.QueryStringParameters["limit"]; l != "" {
+			fmt.Sscanf(l, "%d", &limit)
+		}
+		q := inboxstore.ThreadListQuery{InboxID: inboxID, Limit: limit, Cursor: event.QueryStringParameters["cursor"]}
 		if s := event.QueryStringParameters["status"]; s != "" {
 			q.Status = &s
 		}
-		threads, _, err := threadSv.List(ctx, claims, q)
+		threads, nextCursor, err := threadSv.List(ctx, claims, q)
 		if err != nil {
 			return shared.Error(500, err.Error()), nil
 		}
-		return shared.JSON(200, map[string]any{"threads": threads}), nil
+		resp := map[string]any{"threads": threads}
+		if nextCursor != "" {
+			resp["next_cursor"] = nextCursor
+		}
+		return shared.JSON(200, resp), nil
 
 	case "/v1/inboxes/{inboxId}/threads/{threadId}":
 		switch event.HTTPMethod {
