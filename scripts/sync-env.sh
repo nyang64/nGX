@@ -49,6 +49,9 @@ SQS_WS_DISPATCH_URL=$(tf sqs_ws_dispatch_url)
 SQS_EMBEDDER_URL=$(tf sqs_embedder_url)
 SQS_SES_EVENTS_URL=$(tf ses_events_queue_url)
 
+# TEST_API_KEY: read from .env Bootstrap key, used for integration tests
+TEST_API_KEY=$(grep -E '^#\s*Key:\s*' "$REPO_ROOT/.env" 2>/dev/null | head -1 | sed 's/.*Key:[[:space:]]*//')
+
 # --- database password from Secrets Manager ---
 echo "Fetching DB credentials from Secrets Manager ($DB_SECRET_ARN) ..."
 SECRET_JSON=$(aws secretsmanager get-secret-value \
@@ -92,6 +95,14 @@ SQS_SES_EVENTS_URL=${SQS_SES_EVENTS_URL}
 # API Gateway
 REST_API_ENDPOINT=${REST_API_ENDPOINT}
 APIGW_WEBSOCKET_ENDPOINT=${APIGW_WEBSOCKET_ENDPOINT}
+
+# Integration test vars (maps prod resources to TEST_* names expected by go test ./tests/integration/...)
+TEST_BASE_URL=${REST_API_ENDPOINT}
+TEST_API_KEY=${TEST_API_KEY}
+TEST_S3_BUCKET_EMAILS=${S3_BUCKET_EMAILS}
+TEST_LAMBDA_PREFIX=ngx-prod
+TEST_AWS_REGION=${AWS_REGION}
+TEST_WS_URL=${APIGW_WEBSOCKET_ENDPOINT}
 EOF
 
 echo "Written: $OUT_FILE"
