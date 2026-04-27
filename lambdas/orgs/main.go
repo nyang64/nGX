@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -26,7 +27,10 @@ import (
 	"agentmail/lambdas/shared"
 )
 
-var pool *pgxpool.Pool
+var (
+	pool    *pgxpool.Pool
+	slugRe  = regexp.MustCompile(`^[a-z0-9-]+$`)
+)
 
 func init() {
 	pool = shared.InitDB()
@@ -113,6 +117,9 @@ func createPod(ctx context.Context, event events.APIGatewayProxyRequest, claims 
 	}
 	if err := shared.Decode(event, &req); err != nil || req.Name == "" || req.Slug == "" {
 		return shared.Error(400, "name and slug are required"), nil
+	}
+	if !slugRe.MatchString(req.Slug) {
+		return shared.Error(400, "slug must match ^[a-z0-9-]+$"), nil
 	}
 	pod := &models.Pod{
 		ID:          uuid.New(),

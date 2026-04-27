@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/mail"
 	"time"
 
 	"agentmail/pkg/auth"
@@ -26,6 +27,19 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// validateEmailAddresses returns an error if any address in addrs has an invalid email.
+func validateEmailAddresses(addrs []models.EmailAddress) error {
+	for _, a := range addrs {
+		if a.Email == "" {
+			return fmt.Errorf("email address must not be empty")
+		}
+		if _, err := mail.ParseAddress(a.Email); err != nil {
+			return fmt.Errorf("invalid email address %q: %w", a.Email, err)
+		}
+	}
+	return nil
+}
 
 // ErrInvalidReviewStatus is returned when an action requires a specific review state.
 var ErrInvalidReviewStatus = errors.New("draft is not in the required review status")
@@ -143,6 +157,15 @@ func (s *DraftService) uploadAttachments(ctx context.Context, orgID uuid.UUID, p
 
 // Create stores a new draft.
 func (s *DraftService) Create(ctx context.Context, claims *auth.Claims, req CreateDraftRequest) (*models.Draft, error) {
+	if len(req.To) == 0 {
+		return nil, fmt.Errorf("at least one recipient (to) is required")
+	}
+	for _, addrs := range [][]models.EmailAddress{req.To, req.Cc, req.Bcc} {
+		if err := validateEmailAddresses(addrs); err != nil {
+			return nil, err
+		}
+	}
+
 	now := time.Now().UTC()
 	draftID := uuid.New()
 
@@ -257,6 +280,12 @@ func (s *DraftService) List(ctx context.Context, claims *auth.Claims, inboxID uu
 
 // Update modifies draft content.
 func (s *DraftService) Update(ctx context.Context, claims *auth.Claims, draftID uuid.UUID, req UpdateDraftRequest) (*models.Draft, error) {
+	for _, addrs := range [][]models.EmailAddress{req.To, req.Cc, req.Bcc} {
+		if err := validateEmailAddresses(addrs); err != nil {
+			return nil, err
+		}
+	}
+
 	now := time.Now().UTC()
 
 	// If attachments are being replaced, upload new ones before the transaction.

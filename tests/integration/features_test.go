@@ -1653,3 +1653,123 @@ func TestDraftListPagination(t *testing.T) {
 		}
 	}
 }
+
+// ── nGX-43o: Pod slug validation ─────────────────────────────────────────────
+
+// TestPodSlugValidation verifies that POST /pods rejects slugs that don't
+// match ^[a-z0-9-]+$.
+func TestPodSlugValidation(t *testing.T) {
+	c := newClient(t)
+
+	t.Run("invalid_slug_uppercase_returns_400", func(t *testing.T) {
+		code, body, err := c.post("/v1/pods", map[string]any{
+			"name": "Test Pod",
+			"slug": "UPPERCASE",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("expected 400 for uppercase slug, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("invalid_slug_special_chars_returns_400", func(t *testing.T) {
+		code, body, err := c.post("/v1/pods", map[string]any{
+			"name": "Test Pod",
+			"slug": "my pod!",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("expected 400 for slug with spaces/special chars, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("valid_slug_accepted", func(t *testing.T) {
+		slug := uniqueName("valid-slug")
+		code, body, err := c.post("/v1/pods", map[string]any{
+			"name": "Valid Slug Pod",
+			"slug": slug,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		id := mustStr(t, body, "id")
+		t.Cleanup(func() { c.delete("/v1/pods/" + id) }) //nolint
+	})
+}
+
+// ── nGX-dqd: Draft recipient validation ──────────────────────────────────────
+
+// TestDraftRecipientValidation verifies that draft create/update enforce
+// recipient constraints: at least one To address, valid email format.
+func TestDraftRecipientValidation(t *testing.T) {
+	c := newClient(t)
+
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("drv")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+	t.Run("missing_to_returns_400", func(t *testing.T) {
+		code, body, err := c.post(fmt.Sprintf("/v1/inboxes/%s/drafts", inboxID), map[string]any{
+			"subject":   "No recipient",
+			"body_text": "body",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("expected 400 for draft with no recipients, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("invalid_email_in_to_returns_400", func(t *testing.T) {
+		code, body, err := c.post(fmt.Sprintf("/v1/inboxes/%s/drafts", inboxID), map[string]any{
+			"to":        []map[string]any{{"email": "not-an-email"}},
+			"subject":   "Bad email",
+			"body_text": "body",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("expected 400 for invalid email in to, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("valid_recipient_accepted", func(t *testing.T) {
+		code, body, err := c.post(fmt.Sprintf("/v1/inboxes/%s/drafts", inboxID), map[string]any{
+			"to":        []map[string]any{{"email": "valid@example.com"}},
+			"subject":   "Valid draft",
+			"body_text": "body",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		draftID := mustStr(t, body, "id")
+		t.Cleanup(func() {
+			c.delete(fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inboxID, draftID))
+		}) //nolint
+
+		// Update with invalid cc email should fail.
+		t.Run("invalid_cc_on_update_returns_400", func(t *testing.T) {
+			code, body, err := c.patch(fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inboxID, draftID), map[string]any{
+				"cc": []map[string]any{{"email": "bad-email"}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if code != 400 {
+				t.Errorf("expected 400 for invalid cc email on update, got %d: %v", code, body)
+			}
+		})
+	})
+}
