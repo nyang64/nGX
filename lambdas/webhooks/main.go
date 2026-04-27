@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"agentmail/lambdas/shared"
+	authpkg "agentmail/pkg/auth"
 	"agentmail/pkg/models"
 	whstore "agentmail/services/webhook-service/store"
 )
@@ -43,12 +44,18 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 	case "/v1/webhooks":
 		switch event.HTTPMethod {
 		case "GET":
+			if !claims.HasScope(authpkg.ScopeWebhookRead) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
 			hooks, err := whs.ListWebhooks(ctx, claims.OrgID)
 			if err != nil {
 				return shared.Error(500, err.Error()), nil
 			}
 			return shared.JSON(200, map[string]any{"webhooks": hooks}), nil
 		case "POST":
+			if !claims.HasScope(authpkg.ScopeWebhookWrite) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
 			var req struct {
 				URL        string            `json:"url"`
 				Events     []string          `json:"events"`
@@ -76,12 +83,18 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 	case "/v1/webhooks/{webhookId}":
 		switch event.HTTPMethod {
 		case "GET":
+			if !claims.HasScope(authpkg.ScopeWebhookRead) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
 			hook, err := whs.GetWebhookByIDAndOrg(ctx, webhookID, claims.OrgID)
 			if err != nil {
 				return shared.Error(404, "webhook not found"), nil
 			}
 			return shared.JSON(200, hook), nil
 		case "PATCH":
+			if !claims.HasScope(authpkg.ScopeWebhookWrite) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
 			hook, err := whs.GetWebhookByIDAndOrg(ctx, webhookID, claims.OrgID)
 			if err != nil {
 				return shared.Error(404, "webhook not found"), nil
@@ -109,6 +122,9 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			}
 			return shared.JSON(200, hook), nil
 		case "DELETE":
+			if !claims.HasScope(authpkg.ScopeWebhookWrite) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
 			if err := whs.DeleteWebhook(ctx, webhookID, claims.OrgID); err != nil {
 				return shared.Error(404, "webhook not found"), nil
 			}
@@ -117,6 +133,9 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 
 	case "/v1/webhooks/{webhookId}/deliveries":
 		if event.HTTPMethod == "GET" {
+			if !claims.HasScope(authpkg.ScopeWebhookRead) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
 			deliveries, err := whs.ListDeliveries(ctx, webhookID, claims.OrgID)
 			if err != nil {
 				return shared.Error(500, err.Error()), nil

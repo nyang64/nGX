@@ -23,12 +23,13 @@ import (
 
 // ThreadListQuery contains filter parameters for listing threads.
 type ThreadListQuery struct {
-	InboxID uuid.UUID
-	Status  *string
-	LabelID *uuid.UUID
-	IsRead  *bool
-	Cursor  string
-	Limit   int
+	InboxID   uuid.UUID
+	Status    *string
+	LabelID   *uuid.UUID
+	IsRead    *bool
+	IsStarred *bool
+	Cursor    string
+	Limit     int
 }
 
 // ThreadPatch contains optional fields to update on a thread.
@@ -133,6 +134,11 @@ func (s *PostgresThreadStore) List(ctx context.Context, tx pgx.Tx, orgID uuid.UU
 	if q.IsRead != nil {
 		where += fmt.Sprintf(" AND t.is_read = $%d", argIdx)
 		args = append(args, *q.IsRead)
+		argIdx++
+	}
+	if q.IsStarred != nil {
+		where += fmt.Sprintf(" AND t.is_starred = $%d", argIdx)
+		args = append(args, *q.IsStarred)
 		argIdx++
 	}
 	if q.LabelID != nil {

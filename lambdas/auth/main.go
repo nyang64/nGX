@@ -40,6 +40,10 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 	method := event.HTTPMethod
 	resource := event.Resource
 
+	if !claims.HasScope(authpkg.ScopeOrgAdmin) {
+		return shared.Error(403, "insufficient scope"), nil
+	}
+
 	switch {
 	case method == "GET" && resource == "/v1/keys":
 		return listKeys(ctx, claims)

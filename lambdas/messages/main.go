@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"agentmail/lambdas/shared"
+	authpkg "agentmail/pkg/auth"
 	s3pkg "agentmail/pkg/s3"
 	sqspkg "agentmail/pkg/sqs"
 	inboxsvc "agentmail/services/inbox/service"
@@ -68,6 +69,9 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 	switch event.Resource {
 	case "/v1/inboxes/{inboxId}/threads/{threadId}/messages":
 		if event.HTTPMethod == "GET" {
+			if !claims.HasScope(authpkg.ScopeInboxRead) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
 			limit := 0
 			if l := event.QueryStringParameters["limit"]; l != "" {
 				fmt.Sscanf(l, "%d", &limit)
@@ -85,6 +89,9 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 
 	case "/v1/inboxes/{inboxId}/threads/{threadId}/messages/{messageId}":
 		if event.HTTPMethod == "GET" {
+			if !claims.HasScope(authpkg.ScopeInboxRead) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
 			msg, err := messageSv.Get(ctx, claims, messageID)
 			if err != nil {
 				return shared.Error(404, "message not found"), nil
@@ -94,6 +101,9 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 
 	case "/v1/inboxes/{inboxId}/messages/send":
 		if event.HTTPMethod == "POST" {
+			if !claims.HasScope(authpkg.ScopeInboxWrite) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
 			var req inboxsvc.SendMessageRequest
 			if err := shared.Decode(event, &req); err != nil {
 				return shared.Error(400, "invalid request body"), nil
