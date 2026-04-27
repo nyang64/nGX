@@ -161,13 +161,14 @@ func patchPod(ctx context.Context, event events.APIGatewayProxyRequest, claims *
 		return shared.Error(400, "invalid pod ID"), nil
 	}
 	var req struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
+		Settings    map[string]any `json:"settings"`
 	}
 	if err := shared.Decode(event, &req); err != nil || req.Name == "" {
 		return shared.Error(400, "name is required"), nil
 	}
-	pod, err := updatePod(ctx, claims.OrgID, podID, req.Name, req.Description)
+	pod, err := updatePod(ctx, claims.OrgID, podID, req.Name, req.Description, req.Settings)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			return shared.Error(404, "pod not found"), nil
@@ -286,14 +287,23 @@ func fetchPod(ctx context.Context, orgID, podID uuid.UUID) (*models.Pod, error) 
 	return &pod, nil
 }
 
-func updatePod(ctx context.Context, orgID, podID uuid.UUID, name, desc string) (*models.Pod, error) {
+func updatePod(ctx context.Context, orgID, podID uuid.UUID, name, desc string, settings map[string]any) (*models.Pod, error) {
 	now := time.Now().UTC()
 	err := dbpkg.WithOrgTx(ctx, pool, orgID, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx,
-			`UPDATE pods SET name = $1, description = $2, updated_at = $3
-			 WHERE org_id = $4 AND id = $5`,
-			name, desc, now, orgID, podID,
-		)
+		var err error
+		if settings != nil {
+			_, err = tx.Exec(ctx,
+				`UPDATE pods SET name = $1, description = $2, settings = $3, updated_at = $4
+				 WHERE org_id = $5 AND id = $6`,
+				name, desc, settings, now, orgID, podID,
+			)
+		} else {
+			_, err = tx.Exec(ctx,
+				`UPDATE pods SET name = $1, description = $2, updated_at = $3
+				 WHERE org_id = $4 AND id = $5`,
+				name, desc, now, orgID, podID,
+			)
+		}
 		return err
 	})
 	if err != nil {

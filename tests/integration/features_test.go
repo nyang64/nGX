@@ -1773,3 +1773,357 @@ func TestDraftRecipientValidation(t *testing.T) {
 		})
 	})
 }
+
+// ── nGX-5jg: Draft scheduled_at round-trip ───────────────────────────────────
+
+// TestDraftScheduledAtRoundTrip verifies that scheduled_at is stored and returned
+// correctly in GET /drafts/{id} before the scheduler runs.
+func TestDraftScheduledAtRoundTrip(t *testing.T) {
+	c := newClient(t)
+
+	_, inboxesBody, err := c.get("/v1/inboxes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inboxes := listOf(inboxesBody, "inboxes")
+	if len(inboxes) == 0 {
+		t.Skip("no inboxes available")
+	}
+	inboxID := str(asMap(inboxes[0]), "id")
+	inboxEmail := str(asMap(inboxes[0]), "email")
+
+	// 5 minutes in the future so the scheduler won't process it during the test.
+	futureTime := time.Now().UTC().Add(5 * time.Minute).Truncate(time.Second)
+	scheduledAt := futureTime.Format(time.RFC3339)
+
+	code, body, err := c.post(fmt.Sprintf("/v1/inboxes/%s/drafts", inboxID), map[string]any{
+		"to":           []map[string]any{{"email": inboxEmail}},
+		"subject":      uniqueName("sched-draft"),
+		"body_text":    "scheduled draft test",
+		"scheduled_at": scheduledAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	draftID := mustStr(t, body, "id")
+	t.Cleanup(func() {
+		c.delete(fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inboxID, draftID))
+	})
+
+	t.Run("scheduled_at_in_response", func(t *testing.T) {
+		if str(body, "scheduled_at") == "" {
+			t.Fatal("scheduled_at missing from POST response")
+		}
+	})
+
+	t.Run("scheduled_at_round_trips_via_get", func(t *testing.T) {
+		code, got, err := c.get(fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inboxID, draftID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, got)
+		gotAt := str(got, "scheduled_at")
+		if gotAt == "" {
+			t.Fatal("scheduled_at missing from GET response")
+		}
+		// Parse both as RFC3339 and compare to second precision.
+		gotParsed, err := time.Parse(time.RFC3339, gotAt)
+		if err != nil {
+			// try RFC3339Nano
+			gotParsed, err = time.Parse(time.RFC3339Nano, gotAt)
+			if err != nil {
+				t.Fatalf("scheduled_at not RFC3339: %q", gotAt)
+			}
+		}
+		if !gotParsed.Truncate(time.Second).Equal(futureTime) {
+			t.Errorf("scheduled_at mismatch: got %v, want %v", gotParsed.Truncate(time.Second), futureTime)
+		}
+	})
+
+	t.Run("review_status_is_pending_before_scheduler", func(t *testing.T) {
+		code, got, err := c.get(fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inboxID, draftID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, got)
+		if s := str(got, "review_status"); s != "pending" {
+			t.Errorf("expected review_status=pending, got %q", s)
+		}
+	})
+}
+
+// ── nGX-ad9: Pod PATCH settings field ────────────────────────────────────────
+
+// TestPodPatchSettings verifies that settings can be updated via PATCH /pods/{id}.
+func TestPodPatchSettings(t *testing.T) {
+	c := newClient(t)
+
+	code, body, err := c.post("/v1/pods", map[string]any{
+		"name": uniqueName("pod-settings"),
+		"slug": uniqueName("pod-settings"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	podID := mustStr(t, body, "id")
+	t.Cleanup(func() {
+		c.delete("/v1/pods/" + podID)
+	})
+
+	t.Run("patch_settings_field", func(t *testing.T) {
+		code, got, err := c.patch("/v1/pods/"+podID, map[string]any{
+			"name":     str(body, "name"),
+			"settings": map[string]any{"theme": "dark", "notifications": true},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, got)
+	})
+
+	t.Run("settings_persisted_in_get", func(t *testing.T) {
+		code, got, err := c.get("/v1/pods/" + podID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, got)
+		settings, ok := got["settings"].(map[string]any)
+		if !ok {
+			t.Fatalf("settings field not a map: %T %v", got["settings"], got["settings"])
+		}
+		if settings["theme"] != "dark" {
+			t.Errorf("expected settings.theme=dark, got %v", settings["theme"])
+		}
+	})
+
+	t.Run("patch_without_settings_preserves_existing", func(t *testing.T) {
+		// PATCH with only name — settings should remain unchanged.
+		code, _, err := c.patch("/v1/pods/"+podID, map[string]any{
+			"name": str(body, "name"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, map[string]any{})
+
+		code, got, err := c.get("/v1/pods/" + podID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, got)
+		settings, ok := got["settings"].(map[string]any)
+		if !ok {
+			t.Fatalf("settings field not a map after name-only patch: %T", got["settings"])
+		}
+		if settings["theme"] != "dark" {
+			t.Errorf("settings should be preserved after name-only patch, got %v", settings)
+		}
+	})
+}
+
+// ── nGX-egf: Label hex color validation ──────────────────────────────────────
+
+// TestLabelColorValidation verifies that invalid color strings are rejected.
+func TestLabelColorValidation(t *testing.T) {
+	c := newClient(t)
+
+	t.Run("non_hex_string_returns_400", func(t *testing.T) {
+		code, body, err := c.post("/v1/labels", map[string]any{
+			"name":  uniqueName("label-color"),
+			"color": "not-a-hex",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("expected 400 for non-hex color, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("invalid_hex_chars_returns_400", func(t *testing.T) {
+		code, body, err := c.post("/v1/labels", map[string]any{
+			"name":  uniqueName("label-color"),
+			"color": "#gg0000",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("expected 400 for invalid hex chars, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("valid_hex_color_returns_201", func(t *testing.T) {
+		name := uniqueName("label-color-valid")
+		code, body, err := c.post("/v1/labels", map[string]any{
+			"name":  name,
+			"color": "#ff5733",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		labelID := mustStr(t, body, "id")
+		t.Cleanup(func() {
+			c.delete("/v1/labels/" + labelID)
+		})
+		if str(body, "color") != "#ff5733" {
+			t.Errorf("expected color=#ff5733, got %q", str(body, "color"))
+		}
+	})
+
+	t.Run("update_with_invalid_color_returns_400", func(t *testing.T) {
+		// Create valid label first.
+		name := uniqueName("label-update-color")
+		code, body, err := c.post("/v1/labels", map[string]any{
+			"name":  name,
+			"color": "#aabbcc",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		labelID := mustStr(t, body, "id")
+		t.Cleanup(func() {
+			c.delete("/v1/labels/" + labelID)
+		})
+
+		code, body, err = c.patch("/v1/labels/"+labelID, map[string]any{
+			"color": "badcolor",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("expected 400 for invalid color on update, got %d: %v", code, body)
+		}
+	})
+}
+
+// ── nGX-hwl: Thread PATCH empty body ─────────────────────────────────────────
+
+// TestThreadPatchEmptyBody documents and asserts the behavior of PATCH /threads/{id}
+// with no recognized fields — the handler returns 400 "at least one field required".
+func TestThreadPatchEmptyBody(t *testing.T) {
+	c := newClient(t)
+
+	// Create an inbox and send a message to get a thread.
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("hwl")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) })
+
+	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
+		"to":        []map[string]any{{"email": "hwl-test@example.com"}},
+		"subject":   uniqueName("hwl-thread"),
+		"body_text": "thread patch empty body test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	threadID := mustStr(t, body, "thread_id")
+
+	t.Run("empty_body_returns_400", func(t *testing.T) {
+		code, body, err := c.patch(fmt.Sprintf("/v1/inboxes/%s/threads/%s", inboxID, threadID), map[string]any{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("expected 400 for empty PATCH body, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("unknown_field_only_returns_400", func(t *testing.T) {
+		code, body, err := c.patch(fmt.Sprintf("/v1/inboxes/%s/threads/%s", inboxID, threadID), map[string]any{
+			"unknown_field": "some_value",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("expected 400 for unrecognized-only PATCH body, got %d: %v", code, body)
+		}
+	})
+}
+
+// ── nGX-lc0: GET /keys pagination ────────────────────────────────────────────
+
+// TestKeysListPagination verifies that GET /keys supports cursor-based pagination.
+func TestKeysListPagination(t *testing.T) {
+	c := newClient(t)
+
+	// Create enough keys to exceed limit=2 (need ≥3).
+	const total = 3
+	var keyIDs []string
+	for i := 0; i < total; i++ {
+		code, body, err := c.post("/v1/keys", map[string]any{
+			"name":   fmt.Sprintf("pagination-test-key-%d-%d", time.Now().UnixNano(), i),
+			"scopes": []string{"inbox:read"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		keyIDs = append(keyIDs, mustStr(t, body, "id"))
+	}
+	t.Cleanup(func() {
+		for _, id := range keyIDs {
+			c.delete("/v1/keys/" + id)
+		}
+	})
+
+	t.Run("limit_returns_fewer_items_and_cursor", func(t *testing.T) {
+		code, body, err := c.get("/v1/keys?limit=2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		keys := listOf(body, "keys")
+		if len(keys) != 2 {
+			t.Fatalf("expected 2 keys, got %d", len(keys))
+		}
+		if str(body, "next_cursor") == "" {
+			t.Fatal("expected next_cursor to be set when more keys exist")
+		}
+	})
+
+	t.Run("cursor_returns_next_page_no_duplicates", func(t *testing.T) {
+		code, body, err := c.get("/v1/keys?limit=2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		page1Keys := listOf(body, "keys")
+		cursor := str(body, "next_cursor")
+		if cursor == "" {
+			t.Skip("no cursor returned; not enough keys to paginate")
+		}
+
+		seen := map[string]bool{}
+		for _, k := range page1Keys {
+			seen[str(asMap(k), "id")] = true
+		}
+
+		code, body, err = c.get("/v1/keys?limit=2&cursor=" + cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		page2Keys := listOf(body, "keys")
+		if len(page2Keys) == 0 {
+			t.Fatal("expected at least one key on second page")
+		}
+		for _, k := range page2Keys {
+			id := str(asMap(k), "id")
+			if seen[id] {
+				t.Errorf("duplicate key %s found across pages", id)
+			}
+		}
+	})
+}

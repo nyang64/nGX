@@ -22,6 +22,7 @@ import (
 	authpkg "agentmail/pkg/auth"
 	dbpkg "agentmail/pkg/db"
 	"agentmail/pkg/models"
+	"agentmail/pkg/pagination"
 	"agentmail/lambdas/shared"
 )
 
@@ -46,7 +47,7 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 
 	switch {
 	case method == "GET" && resource == "/v1/keys":
-		return listKeys(ctx, claims)
+		return listKeys(ctx, event, claims)
 	case method == "POST" && resource == "/v1/keys":
 		return createKey(ctx, event, claims)
 	case method == "GET" && resource == "/v1/keys/{keyId}":
@@ -58,12 +59,24 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 	}
 }
 
-func listKeys(ctx context.Context, claims *authpkg.Claims) (events.APIGatewayProxyResponse, error) {
-	keys, err := fetchKeys(ctx, claims.OrgID)
+func listKeys(ctx context.Context, event events.APIGatewayProxyRequest, claims *authpkg.Claims) (events.APIGatewayProxyResponse, error) {
+	limit := 0
+	if l := event.QueryStringParameters["limit"]; l != "" {
+		fmt.Sscanf(l, "%d", &limit)
+	}
+	cursor := event.QueryStringParameters["cursor"]
+	keys, nextCursor, err := fetchKeys(ctx, claims.OrgID, limit, cursor)
 	if err != nil {
+		if strings.Contains(err.Error(), "invalid cursor") {
+			return shared.Error(400, "invalid cursor"), nil
+		}
 		return shared.Error(500, "failed to list keys"), nil
 	}
-	return shared.JSON(200, map[string]any{"keys": keys}), nil
+	resp := map[string]any{"keys": keys}
+	if nextCursor != "" {
+		resp["next_cursor"] = nextCursor
+	}
+	return shared.JSON(200, resp), nil
 }
 
 func createKey(ctx context.Context, event events.APIGatewayProxyRequest, claims *authpkg.Claims) (events.APIGatewayProxyResponse, error) {
@@ -124,17 +137,35 @@ func deleteKey(ctx context.Context, event events.APIGatewayProxyRequest, claims 
 
 // --- store functions ---
 
-func fetchKeys(ctx context.Context, orgID uuid.UUID) ([]*models.APIKey, error) {
+func fetchKeys(ctx context.Context, orgID uuid.UUID, limit int, cursor string) ([]*models.APIKey, string, error) {
+	limit = pagination.ClampLimit(limit)
+
+	where := "org_id = $1 AND revoked_at IS NULL"
+	args := []any{orgID}
+	argIdx := 2
+
+	if cursor != "" {
+		parts, err := pagination.DecodeCursor(cursor)
+		if err != nil || len(parts) < 2 {
+			return nil, "", fmt.Errorf("invalid cursor")
+		}
+		where += fmt.Sprintf(" AND (created_at, id) < ($%d::timestamptz, $%d::uuid)", argIdx, argIdx+1)
+		args = append(args, parts[0], parts[1])
+		argIdx += 2
+	}
+
+	args = append(args, limit+1)
+	q := fmt.Sprintf(`
+		SELECT id, org_id, name, key_prefix, key_hash, scopes, pod_id,
+		       last_used_at, expires_at, revoked_at, created_at
+		FROM api_keys
+		WHERE %s
+		ORDER BY created_at DESC, id DESC
+		LIMIT $%d`, where, argIdx)
+
 	var keys []*models.APIKey
 	err := dbpkg.WithOrgTx(ctx, pool, orgID, func(tx pgx.Tx) error {
-		const q = `
-			SELECT id, org_id, name, key_prefix, key_hash, scopes, pod_id,
-			       last_used_at, expires_at, revoked_at, created_at
-			FROM api_keys
-			WHERE org_id = $1
-			  AND revoked_at IS NULL
-			ORDER BY created_at DESC`
-		rows, err := tx.Query(ctx, q, orgID)
+		rows, err := tx.Query(ctx, q, args...)
 		if err != nil {
 			return fmt.Errorf("list api keys: %w", err)
 		}
@@ -152,12 +183,19 @@ func fetchKeys(ctx context.Context, orgID uuid.UUID) ([]*models.APIKey, error) {
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if keys == nil {
 		keys = []*models.APIKey{}
 	}
-	return keys, nil
+
+	var nextCursor string
+	if len(keys) > limit {
+		keys = keys[:limit]
+		last := keys[len(keys)-1]
+		nextCursor = pagination.EncodeCursor(last.CreatedAt.Format(time.RFC3339Nano), last.ID.String())
+	}
+	return keys, nextCursor, nil
 }
 
 func insertKey(ctx context.Context, orgID uuid.UUID, name string, scopes []string, podID *uuid.UUID, expiresAt *time.Time) (*models.APIKey, string, error) {

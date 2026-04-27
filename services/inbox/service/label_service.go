@@ -10,6 +10,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"time"
 
 	"agentmail/pkg/auth"
@@ -21,6 +22,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var hexColorRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
 // CreateLabelRequest is the input for creating a label.
 type CreateLabelRequest struct {
@@ -49,6 +52,9 @@ func NewLabelService(pool *pgxpool.Pool, labelStore store.LabelStore) *LabelServ
 
 // Create stores a new label.
 func (s *LabelService) Create(ctx context.Context, claims *auth.Claims, req CreateLabelRequest) (*models.Label, error) {
+	if req.Color != "" && !hexColorRe.MatchString(req.Color) {
+		return nil, fmt.Errorf("color must be a valid 6-digit hex color (e.g. #ff5733)")
+	}
 	label := &models.Label{
 		ID:          uuid.New(),
 		OrgID:       claims.OrgID,
@@ -97,6 +103,9 @@ func (s *LabelService) List(ctx context.Context, claims *auth.Claims) ([]*models
 
 // Update modifies a label.
 func (s *LabelService) Update(ctx context.Context, claims *auth.Claims, labelID uuid.UUID, req UpdateLabelRequest) (*models.Label, error) {
+	if req.Color != nil && *req.Color != "" && !hexColorRe.MatchString(*req.Color) {
+		return nil, fmt.Errorf("color must be a valid 6-digit hex color (e.g. #ff5733)")
+	}
 	var label *models.Label
 	err := dbpkg.WithOrgTx(ctx, s.pool, claims.OrgID, func(tx pgx.Tx) error {
 		var err error
