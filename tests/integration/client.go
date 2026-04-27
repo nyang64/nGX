@@ -29,6 +29,22 @@ type client struct {
 	httpClient *http.Client
 }
 
+// newClientWithKey creates a client using an explicit API key instead of TEST_API_KEY.
+func newClientWithKey(t *testing.T, apiKey string) *client {
+	t.Helper()
+	baseURL := os.Getenv("TEST_BASE_URL")
+	if baseURL == "" {
+		t.Skip("TEST_BASE_URL must be set")
+	}
+	return &client{
+		baseURL: baseURL,
+		apiKey:  apiKey,
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}
+}
+
 func newClient(t *testing.T) *client {
 	t.Helper()
 	baseURL := os.Getenv("TEST_BASE_URL")

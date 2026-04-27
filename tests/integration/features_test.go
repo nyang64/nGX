@@ -818,6 +818,29 @@ func TestDuplicateConflicts(t *testing.T) {
 			t.Errorf("duplicate domain: expected 400 or 409, got %d: %v", code, body2)
 		}
 	})
+
+	t.Run("duplicate_label_name", func(t *testing.T) {
+		name := uniqueName("dup-label")
+		code, body, err := c.post("/v1/labels", map[string]any{"name": name, "color": "#aabbcc"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		id := mustStr(t, body, "id")
+		t.Cleanup(func() { c.delete("/v1/labels/" + id) }) //nolint
+
+		// Second label with identical name.
+		code, body2, err := c.post("/v1/labels", map[string]any{"name": name, "color": "#112233"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code == 500 {
+			t.Errorf("duplicate label name should not return 500 (raw DB error leaked): %v", body2)
+		}
+		if code != 400 && code != 409 {
+			t.Errorf("duplicate label name: expected 400 or 409, got %d: %v", code, body2)
+		}
+	})
 }
 
 // ── nGX-drm: Attachment edge cases ───────────────────────────────────────────

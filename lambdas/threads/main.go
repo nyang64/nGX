@@ -23,6 +23,7 @@ import (
 
 	"agentmail/lambdas/shared"
 	authpkg "agentmail/pkg/auth"
+	dbpkg "agentmail/pkg/db"
 	sqspkg "agentmail/pkg/sqs"
 	inboxsvc "agentmail/services/inbox/service"
 	inboxstore "agentmail/services/inbox/store"
@@ -210,6 +211,9 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			}
 			label, err := labelSv.Create(ctx, claims, req)
 			if err != nil {
+				if dbpkg.IsDuplicateKey(err) {
+					return shared.Error(409, "label with this name already exists"), nil
+				}
 				return shared.Error(400, err.Error()), nil
 			}
 			return shared.JSON(201, label), nil

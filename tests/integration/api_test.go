@@ -10,6 +10,7 @@ package integration
 import (
 	"fmt"
 	"testing"
+	"time"
 )
 
 // TestOrg verifies GET and PATCH /v1/org.
@@ -44,6 +45,39 @@ func TestOrg(t *testing.T) {
 		if got := str(body2, "name"); got != newName {
 			t.Errorf("read-after-write: expected name %q, got %q", newName, got)
 		}
+	})
+}
+
+// TestOrgPatchValidation verifies that PATCH /v1/org enforces the required name field.
+//
+// Note: the OpenAPI spec documents the PATCH /v1/org request body field as
+// "display_name" (UpdateOrganizationRequest), but the handler (lambdas/orgs/main.go)
+// actually binds json:"name". Tests use "name" to match the live handler behaviour.
+func TestOrgPatchValidation(t *testing.T) {
+	c := newClient(t)
+
+	t.Run("empty_name_returns_400", func(t *testing.T) {
+		code, body, err := c.patch("/v1/org", map[string]any{"name": ""})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 400, body)
+	})
+
+	t.Run("missing_name_returns_400", func(t *testing.T) {
+		code, body, err := c.patch("/v1/org", map[string]any{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 400, body)
+	})
+
+	t.Run("valid_name_returns_200", func(t *testing.T) {
+		code, body, err := c.patch("/v1/org", map[string]any{"name": uniqueName("org")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
 	})
 }
 
@@ -155,6 +189,49 @@ func TestAPIKeys(t *testing.T) {
 		}
 		mustCode(t, code, 204, nil)
 	})
+}
+
+// TestExpiredAPIKeyRejected verifies that a key with expires_at in the past is rejected with 401/403.
+// Note: API Gateway caches authorizer results for 300s per token. To avoid hitting the cache,
+// the key is NEVER used before expiry — the first (and only) request hits the authorizer cold
+// after the key has expired, ensuring the DB check runs and returns Deny.
+func TestExpiredAPIKeyRejected(t *testing.T) {
+	admin := newClient(t)
+
+	// Key expires in 3 seconds — do NOT use it before that.
+	expiresAt := time.Now().UTC().Add(3 * time.Second).Format(time.RFC3339)
+	code, body, err := admin.post("/v1/keys", map[string]any{
+		"name":       uniqueName("expkey"),
+		"scopes":     []string{"inbox:read"},
+		"expires_at": expiresAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+
+	// Verify expires_at is stored and returned.
+	if str(body, "expires_at") == "" {
+		t.Fatal("expected expires_at in key response")
+	}
+
+	plaintext := mustStr(t, body, "key")
+	keyID := mustStr(t, body, "id")
+	t.Cleanup(func() { admin.delete("/v1/keys/" + keyID) }) //nolint
+
+	expiredClient := newClientWithKey(t, plaintext)
+
+	// Wait for the key to expire (never used it before, so no authorizer cache).
+	time.Sleep(4 * time.Second)
+
+	// First ever use of this key — authorizer runs cold and finds it expired.
+	code, body, err = expiredClient.get("/v1/inboxes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 401 && code != 403 {
+		t.Fatalf("expected 401 or 403 for expired key, got %d: %v", code, body)
+	}
 }
 
 // TestLabels verifies full CRUD on /v1/labels.

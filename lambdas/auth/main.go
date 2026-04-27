@@ -68,15 +68,16 @@ func listKeys(ctx context.Context, claims *authpkg.Claims) (events.APIGatewayPro
 
 func createKey(ctx context.Context, event events.APIGatewayProxyRequest, claims *authpkg.Claims) (events.APIGatewayProxyResponse, error) {
 	var req struct {
-		Name   string     `json:"name"`
-		Scopes []string   `json:"scopes"`
-		PodID  *uuid.UUID `json:"pod_id"`
+		Name      string     `json:"name"`
+		Scopes    []string   `json:"scopes"`
+		PodID     *uuid.UUID `json:"pod_id"`
+		ExpiresAt *time.Time `json:"expires_at"`
 	}
 	if err := shared.Decode(event, &req); err != nil || req.Name == "" {
 		return shared.Error(400, "name is required"), nil
 	}
 
-	key, plaintext, err := insertKey(ctx, claims.OrgID, req.Name, req.Scopes, req.PodID)
+	key, plaintext, err := insertKey(ctx, claims.OrgID, req.Name, req.Scopes, req.PodID, req.ExpiresAt)
 	if err != nil {
 		return shared.Error(500, "failed to create key"), nil
 	}
@@ -159,7 +160,7 @@ func fetchKeys(ctx context.Context, orgID uuid.UUID) ([]*models.APIKey, error) {
 	return keys, nil
 }
 
-func insertKey(ctx context.Context, orgID uuid.UUID, name string, scopes []string, podID *uuid.UUID) (*models.APIKey, string, error) {
+func insertKey(ctx context.Context, orgID uuid.UUID, name string, scopes []string, podID *uuid.UUID, expiresAt *time.Time) (*models.APIKey, string, error) {
 	plaintext, keyHash, displayPrefix, err := authpkg.GenerateAPIKey()
 	if err != nil {
 		return nil, "", fmt.Errorf("generate api key: %w", err)
@@ -169,13 +170,13 @@ func insertKey(ctx context.Context, orgID uuid.UUID, name string, scopes []strin
 	now := time.Now().UTC()
 
 	const q = `
-		INSERT INTO api_keys (id, org_id, name, key_prefix, key_hash, scopes, pod_id, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO api_keys (id, org_id, name, key_prefix, key_hash, scopes, pod_id, expires_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id, org_id, name, key_prefix, key_hash, scopes, pod_id,
 		          last_used_at, expires_at, revoked_at, created_at`
 
 	key := &models.APIKey{}
-	row := pool.QueryRow(ctx, q, id, orgID, name, displayPrefix, keyHash, scopes, podID, now)
+	row := pool.QueryRow(ctx, q, id, orgID, name, displayPrefix, keyHash, scopes, podID, expiresAt, now)
 	if err := row.Scan(
 		&key.ID, &key.OrgID, &key.Name, &key.KeyPrefix, &key.KeyHash,
 		&key.Scopes, &key.PodID, &key.LastUsedAt, &key.ExpiresAt, &key.RevokedAt, &key.CreatedAt,
