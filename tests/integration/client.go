@@ -92,6 +92,26 @@ func (c *client) delete(path string) (int, map[string]any, error) {
 	return c.do("DELETE", path, nil)
 }
 
+// getBytes performs a GET and returns the raw response bytes and status code.
+// Used for binary endpoints (raw message, attachment download). Sends
+// Accept: application/octet-stream so API Gateway decodes the base64 body
+// before forwarding to the client.
+func (c *client) getBytes(path string) (int, []byte, http.Header, error) {
+	req, err := http.NewRequest("GET", c.baseURL+path, nil)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Accept", "application/octet-stream")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	return resp.StatusCode, data, resp.Header, err
+}
+
 // mustStr extracts a string field from a response map, failing the test if missing.
 func mustStr(t *testing.T, m map[string]any, key string) string {
 	t.Helper()

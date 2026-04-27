@@ -36,6 +36,7 @@ type MessageStore interface {
 	UpdateStatus(ctx context.Context, tx pgx.Tx, orgID, messageID uuid.UUID, status models.MessageStatus) error
 	UpdateMessage(ctx context.Context, tx pgx.Tx, orgID, messageID uuid.UUID, patch MessagePatch) (*models.Message, error)
 	CreateAttachment(ctx context.Context, tx pgx.Tx, att *models.Attachment) error
+	GetAttachmentByID(ctx context.Context, tx pgx.Tx, orgID, messageID, attachmentID uuid.UUID) (*models.Attachment, error)
 	ListAttachments(ctx context.Context, tx pgx.Tx, orgID, messageID uuid.UUID) ([]*models.Attachment, error)
 	CreateDraftAttachment(ctx context.Context, tx pgx.Tx, att *models.Attachment) error
 	ListDraftAttachments(ctx context.Context, tx pgx.Tx, orgID, draftID uuid.UUID) ([]*models.Attachment, error)
@@ -277,6 +278,23 @@ func (s *PostgresMessageStore) CreateAttachment(ctx context.Context, tx pgx.Tx, 
 		return fmt.Errorf("insert attachment: %w", err)
 	}
 	return nil
+}
+
+// GetAttachmentByID returns a single attachment belonging to the given message.
+func (s *PostgresMessageStore) GetAttachmentByID(ctx context.Context, tx pgx.Tx, orgID, messageID, attachmentID uuid.UUID) (*models.Attachment, error) {
+	q := `
+		SELECT id, org_id, message_id, draft_id, filename, content_type, size_bytes, s3_key, content_id, is_inline, created_at
+		FROM attachments
+		WHERE org_id = $1 AND message_id = $2 AND id = $3
+	`
+	var a models.Attachment
+	err := tx.QueryRow(ctx, q, orgID, messageID, attachmentID).Scan(
+		&a.ID, &a.OrgID, &a.MessageID, &a.DraftID, &a.Filename, &a.ContentType, &a.SizeBytes, &a.S3Key, &a.ContentID, &a.Inline, &a.CreatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get attachment: %w", err)
+	}
+	return &a, nil
 }
 
 // ListAttachments returns all attachments for a message.

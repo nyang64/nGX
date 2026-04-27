@@ -267,6 +267,7 @@ resource "aws_lambda_function" "messages" {
       WS_DISPATCH_QUEUE_URL      = aws_sqs_queue.ws_dispatch.url
       EMBEDDER_QUEUE_URL         = aws_sqs_queue.embedder.url
       S3_BUCKET_ATTACHMENTS      = aws_s3_bucket.attachments.id
+      S3_BUCKET_EMAILS           = aws_s3_bucket.emails.id
     })
   }
 

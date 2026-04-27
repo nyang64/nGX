@@ -10,6 +10,7 @@ package shared
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -91,6 +92,26 @@ func JSON(statusCode int, body any) events.APIGatewayProxyResponse {
 			"Access-Control-Allow-Origin": "*",
 		},
 		Body: string(data),
+	}
+}
+
+// Binary returns a response with the given content type and body.
+// The body is base64-encoded so API Gateway can decode it when the client
+// sends a matching Accept header; for text content (message/rfc822, text/plain)
+// it is also safe to consume as-is when binary decoding is not triggered.
+func Binary(statusCode int, data []byte, contentType, contentDisposition string) events.APIGatewayProxyResponse {
+	headers := map[string]string{
+		"Content-Type":                contentType,
+		"Access-Control-Allow-Origin": "*",
+	}
+	if contentDisposition != "" {
+		headers["Content-Disposition"] = contentDisposition
+	}
+	return events.APIGatewayProxyResponse{
+		StatusCode:      statusCode,
+		Headers:         headers,
+		Body:            base64.StdEncoding.EncodeToString(data),
+		IsBase64Encoded: true,
 	}
 }
 

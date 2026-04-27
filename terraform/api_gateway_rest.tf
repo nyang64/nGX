@@ -4,6 +4,8 @@ resource "aws_api_gateway_rest_api" "main" {
   name        = "${local.prefix}-api"
   description = "nGX REST API"
 
+  binary_media_types = ["application/octet-stream", "message/rfc822"]
+
   endpoint_configuration {
     types = ["REGIONAL"]
   }

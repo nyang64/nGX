@@ -49,11 +49,17 @@ func init() {
 		os.Exit(1)
 	}
 
+	emailsS3, err := s3pkg.NewFromAWS(ctx, os.Getenv("S3_BUCKET_EMAILS"))
+	if err != nil {
+		slog.Error("messages: init emails S3 client", "error", err)
+		os.Exit(1)
+	}
+
 	messageSv = inboxsvc.NewMessageService(pool,
 		inboxstore.NewPostgresMessageStore(pool),
 		inboxstore.NewPostgresThreadStore(pool),
 		inboxstore.NewPostgresInboxStore(pool),
-		pub, pub, attachmentsS3)
+		pub, pub, attachmentsS3, emailsS3)
 }
 
 func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
@@ -125,6 +131,32 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 				return shared.Error(404, "message not found"), nil
 			}
 			return shared.JSON(200, msg), nil
+		}
+
+	case "/v1/inboxes/{inboxId}/threads/{threadId}/messages/{messageId}/raw":
+		if event.HTTPMethod == "GET" {
+			if !claims.HasScope(authpkg.ScopeInboxRead) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
+			data, err := messageSv.GetRaw(ctx, claims, messageID)
+			if err != nil {
+				return shared.Error(404, "raw message not found"), nil
+			}
+			return shared.Binary(200, data, "message/rfc822", ""), nil
+		}
+
+	case "/v1/inboxes/{inboxId}/threads/{threadId}/messages/{messageId}/attachments/{attachmentId}":
+		if event.HTTPMethod == "GET" {
+			if !claims.HasScope(authpkg.ScopeInboxRead) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
+			attachmentID, _ := uuid.Parse(event.PathParameters["attachmentId"])
+			att, data, err := messageSv.GetAttachmentContent(ctx, claims, messageID, attachmentID)
+			if err != nil {
+				return shared.Error(404, "attachment not found"), nil
+			}
+			disposition := fmt.Sprintf("attachment; filename=%q", att.Filename)
+			return shared.Binary(200, data, att.ContentType, disposition), nil
 		}
 
 	case "/v1/inboxes/{inboxId}/threads/{threadId}/messages/{messageId}/reply-all":

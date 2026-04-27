@@ -81,6 +81,7 @@ type MessageService struct {
 	outboundProducer events.OutboundPublisher
 	eventPublisher   events.EventPublisher
 	attachmentsS3    *s3pkg.Client
+	emailsS3         *s3pkg.Client
 }
 
 // NewMessageService creates a new MessageService.
@@ -92,6 +93,7 @@ func NewMessageService(
 	outboundProducer events.OutboundPublisher,
 	eventPublisher events.EventPublisher,
 	attachmentsS3 *s3pkg.Client,
+	emailsS3 *s3pkg.Client,
 ) *MessageService {
 	return &MessageService{
 		pool:             pool,
@@ -101,6 +103,7 @@ func NewMessageService(
 		outboundProducer: outboundProducer,
 		eventPublisher:   eventPublisher,
 		attachmentsS3:    attachmentsS3,
+		emailsS3:         emailsS3,
 	}
 }
 
@@ -391,6 +394,46 @@ func (s *MessageService) Send(ctx context.Context, claims *auth.Claims, inboxID 
 	})
 
 	return msg, nil
+}
+
+// GetRaw returns the raw RFC 5322 bytes for an inbound message from S3.
+// Outbound messages do not have a raw key and return an error.
+func (s *MessageService) GetRaw(ctx context.Context, claims *auth.Claims, messageID uuid.UUID) ([]byte, error) {
+	msg, err := s.Get(ctx, claims, messageID)
+	if err != nil {
+		return nil, err
+	}
+	if msg.RawS3Key == "" {
+		return nil, fmt.Errorf("raw message not available")
+	}
+	if s.emailsS3 == nil {
+		return nil, fmt.Errorf("emails S3 client not configured")
+	}
+	data, err := s.emailsS3.Download(ctx, msg.RawS3Key)
+	if err != nil {
+		return nil, fmt.Errorf("download raw message: %w", err)
+	}
+	return data, nil
+}
+
+// GetAttachmentContent returns the attachment record and its binary content.
+func (s *MessageService) GetAttachmentContent(ctx context.Context, claims *auth.Claims, messageID, attachmentID uuid.UUID) (*models.Attachment, []byte, error) {
+	var att *models.Attachment
+	if err := dbpkg.WithOrgTx(ctx, s.pool, claims.OrgID, func(tx pgx.Tx) error {
+		var err error
+		att, err = s.messageStore.GetAttachmentByID(ctx, tx, claims.OrgID, messageID, attachmentID)
+		return err
+	}); err != nil {
+		return nil, nil, fmt.Errorf("get attachment: %w", err)
+	}
+	if s.attachmentsS3 == nil {
+		return nil, nil, fmt.Errorf("attachments S3 client not configured")
+	}
+	data, err := s.attachmentsS3.Download(ctx, att.S3Key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("download attachment: %w", err)
+	}
+	return att, data, nil
 }
 
 // ReplyAllRequest is the input for a reply-all operation.
