@@ -1066,6 +1066,123 @@ paths:
         "500": { $ref: "#/components/responses/InternalError" }
 
   # -------------------------------------------------------------------------
+  # Domains
+  # -------------------------------------------------------------------------
+  /domains:
+    get:
+      tags: [Domains]
+      operationId: listDomains
+      summary: List custom domains
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [domains]
+                properties:
+                  domains:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DomainConfig"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      tags: [Domains]
+      operationId: registerDomain
+      summary: Register a custom domain
+      description: |
+        Registers a custom domain for inbound email routing. Creates an SES domain
+        identity and receipt rule. Returns DNS records the customer must add to
+        their registrar for verification and DKIM signing.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterDomainRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisterDomainResponse"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /domains/{domainId}:
+    parameters:
+      - $ref: "#/components/parameters/domainId"
+    get:
+      tags: [Domains]
+      operationId: getDomain
+      summary: Get a custom domain
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainConfig"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    delete:
+      tags: [Domains]
+      operationId: deleteDomain
+      summary: Delete a custom domain
+      description: |
+        Removes the domain from the database and cleans up the SES receipt rule
+        and domain identity. The domain must be in the caller's org.
+      security:
+        - BearerAuth: []
+      responses:
+        "204":
+          description: Deleted
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /domains/{domainId}/verify:
+    parameters:
+      - $ref: "#/components/parameters/domainId"
+    post:
+      tags: [Domains]
+      operationId: verifyDomain
+      summary: Re-check domain verification status
+      description: |
+        Polls SES for the current verification status of the domain and updates
+        the record in the database. Returns the updated domain and the DNS records
+        so the customer can confirm what they need to add.
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisterDomainResponse"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  # -------------------------------------------------------------------------
   # WebSocket
   # -------------------------------------------------------------------------
   /ws:
@@ -2642,6 +2759,106 @@ components:
           type: boolean
         client_id:
           type: string
+
+    # DomainConfig matches the actual DomainConfig model returned by the live API.
+    DomainConfig:
+      type: object
+      required: [id, org_id, domain, status, dkim_selector, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        org_id:
+          type: string
+          format: uuid
+        pod_id:
+          type: string
+          format: uuid
+          nullable: true
+        domain:
+          type: string
+          description: The custom domain name, e.g. "mail.example.com"
+        status:
+          type: string
+          enum: [pending, verifying, active, failed]
+          description: SES verification/receipt status
+        dkim_selector:
+          type: string
+          description: DKIM selector managed by SES
+        verified_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      example:
+        id: "b3f1e2d4-0001-0002-0003-000000000001"
+        org_id: "4016a9af-aecc-4b45-b134-64c8ae557571"
+        pod_id: null
+        domain: "mail.example.com"
+        status: "pending"
+        dkim_selector: "ses"
+        verified_at: null
+        created_at: "2026-04-01T10:00:00Z"
+        updated_at: "2026-04-01T10:00:00Z"
+
+    # DNSRecordItem matches models.DNSRecord (type/name/value/purpose).
+    DNSRecordItem:
+      type: object
+      required: [type, name, value, purpose]
+      properties:
+        type:
+          type: string
+          enum: [TXT, MX, CNAME]
+        name:
+          type: string
+          description: DNS hostname for the record
+        value:
+          type: string
+          description: DNS record value
+        purpose:
+          type: string
+          description: Human-readable description of why this record is needed
+
+    RegisterDomainRequest:
+      type: object
+      required: [Domain]
+      properties:
+        Domain:
+          type: string
+          description: The domain to register, e.g. "mail.example.com"
+          example: "mail.example.com"
+        PodID:
+          type: string
+          format: uuid
+          description: Optional pod to scope the domain to
+          nullable: true
+      example:
+        Domain: "mail.example.com"
+        PodID: null
+
+    RegisterDomainResponse:
+      type: object
+      required: [Domain, DNSRecords]
+      description: |
+        Response to POST /domains and POST /domains/{id}/verify.
+        Field names use Go struct casing (Domain, DNSRecords) as the service
+        returns them without json tags.
+      properties:
+        Domain:
+          $ref: "#/components/schemas/DomainConfig"
+        DNSRecords:
+          type: array
+          items:
+            $ref: "#/components/schemas/DNSRecordItem"
+          description: |
+            DNS records the customer must add to their registrar.
+            5 records total: 1 TXT (SES verification), 1 MX (inbound routing),
+            3 CNAME (DKIM signing tokens).
 
     # --- API Key --------------------------------------------------------------
 
