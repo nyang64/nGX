@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -75,7 +76,11 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 					}
 				}
 			}
-			inboxes, _, err := inboxSv.List(ctx, claims, podID, 50, event.QueryStringParameters["cursor"])
+			limit := 0
+			if l := event.QueryStringParameters["limit"]; l != "" {
+				fmt.Sscanf(l, "%d", &limit)
+			}
+			inboxes, nextCursor, err := inboxSv.List(ctx, claims, podID, limit, event.QueryStringParameters["cursor"])
 			if err != nil {
 				if strings.Contains(err.Error(), "invalid cursor") {
 					return shared.Error(400, "invalid cursor"), nil
@@ -85,7 +90,11 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			if inboxes == nil {
 				inboxes = []*models.Inbox{}
 			}
-			return shared.JSON(200, map[string]any{"inboxes": inboxes}), nil
+			resp := map[string]any{"inboxes": inboxes}
+			if nextCursor != "" {
+				resp["next_cursor"] = nextCursor
+			}
+			return shared.JSON(200, resp), nil
 		case "POST":
 			if !claims.HasScope(authpkg.ScopeInboxWrite) {
 				return shared.Error(403, "insufficient scope"), nil

@@ -24,6 +24,7 @@ import (
 	"agentmail/lambdas/shared"
 	authpkg "agentmail/pkg/auth"
 	dbpkg "agentmail/pkg/db"
+	"agentmail/pkg/models"
 	sqspkg "agentmail/pkg/sqs"
 	inboxsvc "agentmail/services/inbox/service"
 	inboxstore "agentmail/services/inbox/store"
@@ -143,27 +144,31 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			if err := shared.Decode(event, &req); err != nil {
 				return shared.Error(400, "invalid request body"), nil
 			}
+			// Apply all provided fields sequentially so callers can update
+			// multiple flags in a single PATCH request.
+			var updated *models.Thread
 			if req.Status != nil {
-				t, err := threadSv.UpdateStatus(ctx, claims, threadID, *req.Status)
+				updated, err = threadSv.UpdateStatus(ctx, claims, threadID, *req.Status)
 				if err != nil {
 					return shared.Error(400, err.Error()), nil
 				}
-				return shared.JSON(200, t), nil
 			}
 			if req.IsRead != nil {
-				t, err := threadSv.MarkRead(ctx, claims, threadID, *req.IsRead)
+				updated, err = threadSv.MarkRead(ctx, claims, threadID, *req.IsRead)
 				if err != nil {
 					return shared.Error(400, err.Error()), nil
 				}
-				return shared.JSON(200, t), nil
 			}
 			if req.IsStarred != nil {
-				t, err := threadSv.MarkStarred(ctx, claims, threadID, *req.IsStarred)
+				updated, err = threadSv.MarkStarred(ctx, claims, threadID, *req.IsStarred)
 				if err != nil {
 					return shared.Error(400, err.Error()), nil
 				}
-				return shared.JSON(200, t), nil
 			}
+			if updated != nil {
+				return shared.JSON(200, updated), nil
+			}
+			return shared.Error(400, "at least one field required"), nil
 		}
 
 	case "/v1/inboxes/{inboxId}/threads/{threadId}/labels/{labelId}":

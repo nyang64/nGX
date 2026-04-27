@@ -9,8 +9,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -168,11 +170,22 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			if !claims.HasScope(authpkg.ScopeWebhookRead) {
 				return shared.Error(403, "insufficient scope"), nil
 			}
-			deliveries, err := whs.ListDeliveries(ctx, webhookID, claims.OrgID)
+			limit := 0
+			if l := event.QueryStringParameters["limit"]; l != "" {
+				fmt.Sscanf(l, "%d", &limit)
+			}
+			deliveries, nextCursor, err := whs.ListDeliveries(ctx, webhookID, claims.OrgID, limit, event.QueryStringParameters["cursor"])
 			if err != nil {
+				if strings.Contains(err.Error(), "invalid cursor") {
+					return shared.Error(400, "invalid cursor"), nil
+				}
 				return shared.Error(500, err.Error()), nil
 			}
-			return shared.JSON(200, map[string]any{"deliveries": deliveries}), nil
+			resp := map[string]any{"deliveries": deliveries}
+			if nextCursor != "" {
+				resp["next_cursor"] = nextCursor
+			}
+			return shared.JSON(200, resp), nil
 		}
 	}
 

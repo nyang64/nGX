@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"agentmail/pkg/models"
+	"agentmail/pkg/pagination"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -215,21 +216,39 @@ func (s *DeliveryStore) DeleteWebhook(ctx context.Context, id, orgID uuid.UUID) 
 }
 
 // ListDeliveries returns delivery records for a given webhook, scoped by org via join.
-func (s *DeliveryStore) ListDeliveries(ctx context.Context, webhookID, orgID uuid.UUID) ([]*models.WebhookDelivery, error) {
-	q := `
+func (s *DeliveryStore) ListDeliveries(ctx context.Context, webhookID, orgID uuid.UUID, limit int, cursor string) ([]*models.WebhookDelivery, string, error) {
+	limit = pagination.ClampLimit(limit)
+
+	where := "wd.webhook_id = $1 AND w.org_id = $2"
+	args := []any{webhookID, orgID}
+	argIdx := 3
+
+	if cursor != "" {
+		parts, err := pagination.DecodeCursor(cursor)
+		if err != nil || len(parts) < 2 {
+			return nil, "", fmt.Errorf("invalid cursor")
+		}
+		where += fmt.Sprintf(" AND (wd.created_at, wd.id) < ($%d::timestamptz, $%d::uuid)", argIdx, argIdx+1)
+		args = append(args, parts[0], parts[1])
+		argIdx += 2
+	}
+
+	args = append(args, limit+1)
+	q := fmt.Sprintf(`
 		SELECT wd.id, wd.webhook_id, wd.event_id, wd.event_type, wd.payload, wd.status,
 		       wd.attempt_count, wd.next_attempt_at, wd.last_attempt_at,
 		       wd.response_status, wd.response_body, wd.error_message,
 		       wd.created_at, wd.updated_at
 		FROM webhook_deliveries wd
 		JOIN webhooks w ON w.id = wd.webhook_id
-		WHERE wd.webhook_id = $1 AND w.org_id = $2
-		ORDER BY wd.created_at DESC
-		LIMIT 100
-	`
-	rows, err := s.pool.Query(ctx, q, webhookID, orgID)
+		WHERE %s
+		ORDER BY wd.created_at DESC, wd.id DESC
+		LIMIT $%d
+	`, where, argIdx)
+
+	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list deliveries for webhook %s: %w", webhookID, err)
+		return nil, "", fmt.Errorf("list deliveries for webhook %s: %w", webhookID, err)
 	}
 	defer rows.Close()
 
@@ -254,7 +273,7 @@ func (s *DeliveryStore) ListDeliveries(ctx context.Context, webhookID, orgID uui
 			&d.UpdatedAt,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("scan delivery: %w", err)
+			return nil, "", fmt.Errorf("scan delivery: %w", err)
 		}
 		if responseBody != nil {
 			d.ResponseBody = *responseBody
@@ -265,9 +284,17 @@ func (s *DeliveryStore) ListDeliveries(ctx context.Context, webhookID, orgID uui
 		deliveries = append(deliveries, &d)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate deliveries: %w", err)
+		return nil, "", fmt.Errorf("iterate deliveries: %w", err)
 	}
-	return deliveries, nil
+
+	var nextCursor string
+	if len(deliveries) > limit {
+		deliveries = deliveries[:limit]
+		last := deliveries[len(deliveries)-1]
+		nextCursor = pagination.EncodeCursor(last.CreatedAt.Format(time.RFC3339Nano), last.ID.String())
+	}
+
+	return deliveries, nextCursor, nil
 }
 
 // CreateDelivery inserts a new webhook delivery record with status=pending.

@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -22,6 +23,7 @@ import (
 
 	"agentmail/lambdas/shared"
 	authpkg "agentmail/pkg/auth"
+	"agentmail/pkg/models"
 	s3pkg "agentmail/pkg/s3"
 	sqspkg "agentmail/pkg/sqs"
 	inboxsvc "agentmail/services/inbox/service"
@@ -73,14 +75,25 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			if !claims.HasScope(authpkg.ScopeDraftRead) {
 				return shared.Error(403, "insufficient scope"), nil
 			}
-			drafts, _, err := draftSv.List(ctx, claims, inboxID, 50, event.QueryStringParameters["cursor"])
+			limit := 0
+			if l := event.QueryStringParameters["limit"]; l != "" {
+				fmt.Sscanf(l, "%d", &limit)
+			}
+			drafts, nextCursor, err := draftSv.List(ctx, claims, inboxID, limit, event.QueryStringParameters["cursor"])
 			if err != nil {
 				if strings.Contains(err.Error(), "invalid cursor") {
 					return shared.Error(400, "invalid cursor"), nil
 				}
 				return shared.Error(500, err.Error()), nil
 			}
-			return shared.JSON(200, map[string]any{"drafts": drafts}), nil
+			if drafts == nil {
+				drafts = []*models.Draft{}
+			}
+			resp := map[string]any{"drafts": drafts}
+			if nextCursor != "" {
+				resp["next_cursor"] = nextCursor
+			}
+			return shared.JSON(200, resp), nil
 		case "POST":
 			if !claims.HasScope(authpkg.ScopeDraftWrite) {
 				return shared.Error(403, "insufficient scope"), nil

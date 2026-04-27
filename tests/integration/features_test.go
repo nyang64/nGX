@@ -1452,3 +1452,204 @@ func TestParentPathIntegrity(t *testing.T) {
 		}
 	})
 }
+
+// ── nGX-29n: Thread PATCH multi-field ────────────────────────────────────────
+
+// TestThreadPatchMultiField verifies that PATCH /threads/{id} applies all
+// provided fields (is_read, is_starred) in a single request, not just the first.
+func TestThreadPatchMultiField(t *testing.T) {
+	c := newClient(t)
+
+	// Create inbox and send a message to get a thread.
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("tpmf")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
+		"to":        []map[string]any{{"email": "success@simulator.amazonses.com"}},
+		"subject":   "Multi-field patch test",
+		"body_text": "body",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	threadID := mustStr(t, body, "thread_id")
+
+	t.Run("both_is_read_and_is_starred_applied", func(t *testing.T) {
+		// PATCH with both fields simultaneously.
+		code, body, err := c.patch(fmt.Sprintf("/v1/inboxes/%s/threads/%s", inboxID, threadID), map[string]any{
+			"is_read":    true,
+			"is_starred": true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+
+		// GET the thread and verify both fields were applied.
+		code, body, err = c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s", inboxID, threadID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		if isRead, _ := body["is_read"].(bool); !isRead {
+			t.Errorf("expected is_read=true after multi-field PATCH, got %v", body["is_read"])
+		}
+		if isStarred, _ := body["is_starred"].(bool); !isStarred {
+			t.Errorf("expected is_starred=true after multi-field PATCH, got %v", body["is_starred"])
+		}
+	})
+
+	t.Run("reset_both_fields", func(t *testing.T) {
+		code, body, err := c.patch(fmt.Sprintf("/v1/inboxes/%s/threads/%s", inboxID, threadID), map[string]any{
+			"is_read":    false,
+			"is_starred": false,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+
+		code, body, err = c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s", inboxID, threadID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		if isRead, _ := body["is_read"].(bool); isRead {
+			t.Errorf("expected is_read=false after reset, got %v", body["is_read"])
+		}
+		if isStarred, _ := body["is_starred"].(bool); isStarred {
+			t.Errorf("expected is_starred=false after reset, got %v", body["is_starred"])
+		}
+	})
+}
+
+// ── nGX-8xw: GET /inboxes ?limit= pagination ─────────────────────────────────
+
+// TestInboxListPagination verifies that GET /inboxes respects the ?limit= param
+// and returns next_cursor when more results exist.
+func TestInboxListPagination(t *testing.T) {
+	c := newClient(t)
+
+	// Create 3 inboxes with known addresses.
+	var ids []string
+	for i := 0; i < 3; i++ {
+		code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("ilp")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		id := mustStr(t, body, "id")
+		ids = append(ids, id)
+		t.Cleanup(func() { c.delete("/v1/inboxes/" + id) }) //nolint
+	}
+
+	// First page: limit=2.
+	code, body, err := c.get("/v1/inboxes?limit=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 200, body)
+	page1 := listOf(body, "inboxes")
+	if len(page1) != 2 {
+		t.Fatalf("expected 2 inboxes with limit=2, got %d", len(page1))
+	}
+	cursor := str(body, "next_cursor")
+	if cursor == "" {
+		t.Fatal("expected next_cursor with limit=2 when more inboxes exist")
+	}
+
+	// Second page: follow cursor.
+	code, body, err = c.get("/v1/inboxes?cursor=" + cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 200, body)
+	page2 := listOf(body, "inboxes")
+	if len(page2) == 0 {
+		t.Fatal("expected at least 1 inbox on second page")
+	}
+
+	// No duplicate IDs across pages.
+	seen := map[string]bool{}
+	for _, item := range page1 {
+		seen[str(asMap(item), "id")] = true
+	}
+	for _, item := range page2 {
+		id := str(asMap(item), "id")
+		if seen[id] {
+			t.Errorf("duplicate inbox id %s across pages", id)
+		}
+	}
+}
+
+// ── nGX-r7e: Draft list pagination ───────────────────────────────────────────
+
+// TestDraftListPagination verifies limit/cursor pagination on GET /drafts.
+func TestDraftListPagination(t *testing.T) {
+	c := newClient(t)
+
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("dlp")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+	// Create 3 drafts.
+	for i := 0; i < 3; i++ {
+		code, body, err := c.post(fmt.Sprintf("/v1/inboxes/%s/drafts", inboxID), map[string]any{
+			"to":        []map[string]any{{"email": "x@example.com"}},
+			"subject":   uniqueName("draft-subject"),
+			"body_text": "pagination test",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+	}
+
+	// First page: limit=2.
+	code, body, err = c.get(fmt.Sprintf("/v1/inboxes/%s/drafts?limit=2", inboxID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 200, body)
+	page1 := listOf(body, "drafts")
+	if len(page1) != 2 {
+		t.Fatalf("expected 2 drafts with limit=2, got %d", len(page1))
+	}
+	cursor := str(body, "next_cursor")
+	if cursor == "" {
+		t.Fatal("expected next_cursor when more drafts exist")
+	}
+
+	// Second page.
+	code, body, err = c.get(fmt.Sprintf("/v1/inboxes/%s/drafts?cursor=%s", inboxID, cursor))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 200, body)
+	page2 := listOf(body, "drafts")
+	if len(page2) == 0 {
+		t.Fatal("expected at least 1 draft on second page")
+	}
+
+	// No duplicates.
+	seen := map[string]bool{}
+	for _, item := range page1 {
+		seen[str(asMap(item), "id")] = true
+	}
+	for _, item := range page2 {
+		id := str(asMap(item), "id")
+		if seen[id] {
+			t.Errorf("duplicate draft id %s across pages", id)
+		}
+	}
+}
