@@ -393,6 +393,98 @@ func (s *MessageService) Send(ctx context.Context, claims *auth.Claims, inboxID 
 	return msg, nil
 }
 
+// ReplyAllRequest is the input for a reply-all operation.
+type ReplyAllRequest struct {
+	BodyText    string             `json:"body_text"`
+	BodyHTML    string             `json:"body_html"`
+	Attachments []AttachmentRequest `json:"attachments,omitempty"`
+}
+
+// ForwardRequest is the input for a forward operation.
+type ForwardRequest struct {
+	To          []models.EmailAddress `json:"to"`
+	CC          []models.EmailAddress `json:"cc"`
+	BCC         []models.EmailAddress `json:"bcc"`
+	BodyText    string                `json:"body_text"`
+	BodyHTML    string                `json:"body_html"`
+	Attachments []AttachmentRequest   `json:"attachments,omitempty"`
+}
+
+// ReplyAll sends a reply-all to the given message. Recipients are derived from
+// the original message's From/To/Cc fields, excluding the sending inbox address.
+func (s *MessageService) ReplyAll(ctx context.Context, claims *auth.Claims, inboxID, messageID uuid.UUID, req ReplyAllRequest) (*models.Message, error) {
+	// Load the original message to compute recipients and threading headers.
+	orig, err := s.Get(ctx, claims, messageID)
+	if err != nil {
+		return nil, fmt.Errorf("get original message: %w", err)
+	}
+
+	// Load the inbox to know our own address so we can exclude it.
+	var inboxEmail string
+	if err := dbpkg.WithOrgTx(ctx, s.pool, claims.OrgID, func(tx pgx.Tx) error {
+		inbox, err := s.inboxStore.GetByID(ctx, tx, claims.OrgID, inboxID)
+		if err != nil {
+			return err
+		}
+		inboxEmail = strings.ToLower(inbox.Email)
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("get inbox: %w", err)
+	}
+
+	// Reply-all recipients = original From + To + Cc, excluding our inbox.
+	seen := map[string]bool{inboxEmail: true}
+	var to []models.EmailAddress
+	for _, addr := range append([]models.EmailAddress{orig.From}, append(orig.To, orig.Cc...)...) {
+		key := strings.ToLower(addr.Email)
+		if addr.Email != "" && !seen[key] {
+			seen[key] = true
+			to = append(to, addr)
+		}
+	}
+	if len(to) == 0 {
+		return nil, fmt.Errorf("no recipients after excluding own inbox address")
+	}
+
+	return s.Send(ctx, claims, inboxID, SendMessageRequest{
+		To:          to,
+		Subject:     orig.Subject,
+		BodyText:    req.BodyText,
+		BodyHTML:    req.BodyHTML,
+		ReplyToID:   &messageID,
+		Attachments: req.Attachments,
+	})
+}
+
+// Forward sends the given message to new recipients in a new thread.
+func (s *MessageService) Forward(ctx context.Context, claims *auth.Claims, inboxID, messageID uuid.UUID, req ForwardRequest) (*models.Message, error) {
+	if len(req.To) == 0 {
+		return nil, fmt.Errorf("to is required")
+	}
+
+	// Load the original message to get the subject.
+	orig, err := s.Get(ctx, claims, messageID)
+	if err != nil {
+		return nil, fmt.Errorf("get original message: %w", err)
+	}
+
+	subject := orig.Subject
+	if !strings.HasPrefix(strings.ToLower(subject), "fwd:") {
+		subject = "Fwd: " + subject
+	}
+
+	return s.Send(ctx, claims, inboxID, SendMessageRequest{
+		To:          req.To,
+		CC:          req.CC,
+		BCC:         req.BCC,
+		Subject:     subject,
+		BodyText:    req.BodyText,
+		BodyHTML:    req.BodyHTML,
+		Attachments: req.Attachments,
+		// No ReplyToID — forward always creates a new thread.
+	})
+}
+
 // snippetFrom returns a short preview from the body text.
 func snippetFrom(body string) string {
 	const maxLen = 200

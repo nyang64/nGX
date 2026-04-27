@@ -127,6 +127,38 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			return shared.JSON(200, msg), nil
 		}
 
+	case "/v1/inboxes/{inboxId}/threads/{threadId}/messages/{messageId}/reply-all":
+		if event.HTTPMethod == "POST" {
+			if !claims.HasScope(authpkg.ScopeInboxWrite) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
+			var req inboxsvc.ReplyAllRequest
+			if err := shared.Decode(event, &req); err != nil {
+				return shared.Error(400, "invalid request body"), nil
+			}
+			msg, err := messageSv.ReplyAll(ctx, claims, inboxID, messageID, req)
+			if err != nil {
+				return shared.Error(400, err.Error()), nil
+			}
+			return shared.JSON(201, msg), nil
+		}
+
+	case "/v1/inboxes/{inboxId}/threads/{threadId}/messages/{messageId}/forward":
+		if event.HTTPMethod == "POST" {
+			if !claims.HasScope(authpkg.ScopeInboxWrite) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
+			var req inboxsvc.ForwardRequest
+			if err := shared.Decode(event, &req); err != nil {
+				return shared.Error(400, "invalid request body"), nil
+			}
+			msg, err := messageSv.Forward(ctx, claims, inboxID, messageID, req)
+			if err != nil {
+				return shared.Error(400, err.Error()), nil
+			}
+			return shared.JSON(201, msg), nil
+		}
+
 	case "/v1/inboxes/{inboxId}/messages/send":
 		if event.HTTPMethod == "POST" {
 			if !claims.HasScope(authpkg.ScopeInboxWrite) {
