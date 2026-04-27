@@ -150,22 +150,74 @@ func TestAPIKeys(t *testing.T) {
 func TestLabels(t *testing.T) {
 	c := newClient(t)
 
+	labelName := uniqueName("lbl")
+	labelColor := "#aabbcc"
 	code, body, err := c.post("/v1/labels", map[string]any{
-		"name": uniqueName("lbl"), "color": "#aabbcc",
+		"name": labelName, "color": labelColor,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	mustCode(t, code, 201, body)
 	id := mustStr(t, body, "id")
+	createdAt := mustStr(t, body, "created_at")
 	t.Cleanup(func() { c.delete("/v1/labels/" + id) }) //nolint
 
-	t.Run("list", func(t *testing.T) {
-		code, body, err := c.get("/v1/labels")
+	t.Run("get", func(t *testing.T) {
+		code, got, err := c.get("/v1/labels/" + id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		mustCode(t, code, 200, body)
+		mustCode(t, code, 200, got)
+		if str(got, "id") != id {
+			t.Fatalf("label id mismatch: got %q want %q", str(got, "id"), id)
+		}
+		if str(got, "name") != labelName {
+			t.Fatalf("label name mismatch: got %q want %q", str(got, "name"), labelName)
+		}
+		if str(got, "color") != labelColor {
+			t.Fatalf("label color mismatch: got %q want %q", str(got, "color"), labelColor)
+		}
+		if str(got, "created_at") != createdAt {
+			t.Fatalf("label created_at mismatch: got %q want %q", str(got, "created_at"), createdAt)
+		}
+	})
+
+	t.Run("list", func(t *testing.T) {
+		code, got, err := c.get("/v1/labels")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, got)
+		labels := listOf(got, "labels")
+		found := false
+		for _, item := range labels {
+			lbl := asMap(item)
+			if str(lbl, "id") != id {
+				continue
+			}
+			found = true
+			if str(lbl, "name") != labelName {
+				t.Fatalf("list label name mismatch: got %q want %q", str(lbl, "name"), labelName)
+			}
+			if str(lbl, "color") != labelColor {
+				t.Fatalf("list label color mismatch: got %q want %q", str(lbl, "color"), labelColor)
+			}
+			break
+		}
+		if !found {
+			t.Fatalf("created label %q not found in list", id)
+		}
+	})
+
+	t.Run("get_nonexistent", func(t *testing.T) {
+		code, got, err := c.get("/v1/labels/00000000-0000-0000-0000-000000000000")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 404 {
+			t.Fatalf("expected 404 for nonexistent label, got %d: %v", code, got)
+		}
 	})
 
 	t.Run("patch", func(t *testing.T) {
@@ -396,6 +448,29 @@ func TestDrafts(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("cannot_approve_already_approved_draft", func(t *testing.T) {
+		code, got, err := c.post(fmt.Sprintf("/v1/inboxes/%s/drafts/%s/approve", inboxID, draftID), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 && code != 409 {
+			t.Fatalf("expected 400/409 when approving already-approved draft, got %d: %v", code, got)
+		}
+	})
+
+	t.Run("cannot_patch_approved_draft", func(t *testing.T) {
+		code, got, err := c.patch(
+			fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inboxID, draftID),
+			map[string]any{"subject": "Should Fail"},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 && code != 409 {
+			t.Fatalf("expected 400/409 when patching approved draft, got %d: %v", code, got)
+		}
+	})
 }
 
 // TestDraftRejection verifies the draft reject flow:
@@ -466,12 +541,25 @@ func TestDraftRejection(t *testing.T) {
 	})
 
 	t.Run("cannot_approve_rejected_draft", func(t *testing.T) {
-		code, _, err := c.post(fmt.Sprintf("/v1/inboxes/%s/drafts/%s/approve", inboxID, draftID), nil)
+		code, got, err := c.post(fmt.Sprintf("/v1/inboxes/%s/drafts/%s/approve", inboxID, draftID), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if code == 200 {
-			t.Fatal("expected approval to fail for a rejected draft, got 200")
+		if code != 400 && code != 409 {
+			t.Fatalf("expected 400/409 when approving rejected draft, got %d: %v", code, got)
+		}
+	})
+
+	t.Run("cannot_patch_rejected_draft", func(t *testing.T) {
+		code, got, err := c.patch(
+			fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inboxID, draftID),
+			map[string]any{"subject": "Should Fail"},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 && code != 409 {
+			t.Fatalf("expected 400/409 when patching rejected draft, got %d: %v", code, got)
 		}
 	})
 }

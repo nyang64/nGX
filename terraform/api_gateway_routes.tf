@@ -1696,6 +1696,23 @@ resource "aws_api_gateway_resource" "v1_labels_label_id" {
   path_part   = "{labelId}"
 }
 
+resource "aws_api_gateway_method" "get_v1_labels_label_id" {
+  rest_api_id   = aws_api_gateway_rest_api.main.id
+  resource_id   = aws_api_gateway_resource.v1_labels_label_id.id
+  http_method   = "GET"
+  authorization = "CUSTOM"
+  authorizer_id = aws_api_gateway_authorizer.api_key.id
+}
+
+resource "aws_api_gateway_integration" "get_v1_labels_label_id" {
+  rest_api_id             = aws_api_gateway_rest_api.main.id
+  resource_id             = aws_api_gateway_resource.v1_labels_label_id.id
+  http_method             = aws_api_gateway_method.get_v1_labels_label_id.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = local.lambda_uri.threads
+}
+
 resource "aws_api_gateway_method" "patch_v1_labels_label_id" {
   rest_api_id   = aws_api_gateway_rest_api.main.id
   resource_id   = aws_api_gateway_resource.v1_labels_label_id.id

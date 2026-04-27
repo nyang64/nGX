@@ -195,6 +195,15 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 
 	case "/v1/labels/{labelId}":
 		switch event.HTTPMethod {
+		case "GET":
+			if !claims.HasScope(authpkg.ScopeInboxRead) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
+			label, err := labelSv.Get(ctx, claims, labelID)
+			if err != nil {
+				return shared.Error(404, "label not found"), nil
+			}
+			return shared.JSON(200, label), nil
 		case "PATCH":
 			if !claims.HasScope(authpkg.ScopeInboxWrite) {
 				return shared.Error(403, "insufficient scope"), nil

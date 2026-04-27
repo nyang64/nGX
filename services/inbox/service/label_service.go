@@ -55,7 +55,7 @@ func (s *LabelService) Create(ctx context.Context, claims *auth.Claims, req Crea
 		Name:        req.Name,
 		Color:       req.Color,
 		Description: req.Description,
-		CreatedAt:   time.Now().UTC(),
+		CreatedAt:   time.Now().UTC().Truncate(time.Microsecond),
 	}
 
 	err := dbpkg.WithOrgTx(ctx, s.pool, claims.OrgID, func(tx pgx.Tx) error {
