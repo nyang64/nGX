@@ -1250,3 +1250,182 @@ func TestInboxPodIDFilter(t *testing.T) {
 		}
 	})
 }
+
+// ── nGX-oou: Inbox single GET is org-scoped ───────────────────────────────────
+
+// TestInboxSingleGetIsOrgScoped documents that GET /v1/inboxes/{id} is org-scoped,
+// not pod-scoped. A pod-2 key can directly GET a pod-1 inbox by ID.
+// This is intentional: the route is used for cross-pod inbox lookups (e.g. routing).
+// Pod isolation is enforced only on the LIST endpoint (WHERE pod_id = $X in SQL).
+// If pod-level isolation on GET is desired in the future, add a pod_id check to
+// InboxStore.GetByID and update this test accordingly.
+func TestInboxSingleGetIsOrgScoped(t *testing.T) {
+	admin := newClient(t)
+
+	// Create two pods.
+	code, body, err := admin.post("/v1/pods", map[string]any{"name": "Pod X", "slug": uniqueName("pod")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	pod1ID := mustStr(t, body, "id")
+	t.Cleanup(func() { admin.delete("/v1/pods/" + pod1ID) }) //nolint
+
+	code, body, err = admin.post("/v1/pods", map[string]any{"name": "Pod X", "slug": uniqueName("pod")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	pod2ID := mustStr(t, body, "id")
+	t.Cleanup(func() { admin.delete("/v1/pods/" + pod2ID) }) //nolint
+
+	// Create an inbox in pod1.
+	code, body, err = admin.post("/v1/inboxes", map[string]any{
+		"Address": uniqueName("sgt"),
+		"PodID":   pod1ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	pod1InboxID := mustStr(t, body, "id")
+	t.Cleanup(func() { admin.delete("/v1/inboxes/" + pod1InboxID) }) //nolint
+
+	// Create a pod2-scoped key with inbox:read.
+	code, body, err = admin.post("/v1/keys", map[string]any{
+		"name":   uniqueName("pod2-key"),
+		"scopes": []string{"inbox:read"},
+		"pod_id": pod2ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	pod2KeyID := mustStr(t, body, "id")
+	pod2Key := str(body, "key")
+	t.Cleanup(func() { admin.delete("/v1/keys/" + pod2KeyID) }) //nolint
+
+	c2 := &client{baseURL: admin.baseURL, apiKey: pod2Key, httpClient: admin.httpClient}
+
+	t.Run("pod2_key_can_get_pod1_inbox_directly", func(t *testing.T) {
+		// org-scoped; pod check is intentionally absent on single GET
+		code, body, err := c2.get("/v1/inboxes/" + pod1InboxID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 200 {
+			t.Errorf("pod-2 key should be able to GET a pod-1 inbox directly (org-scoped): got %d %v", code, body)
+		}
+	})
+
+	t.Run("pod2_key_cannot_list_pod1_inbox", func(t *testing.T) {
+		// pod isolation on list is enforced (WHERE pod_id = $X in SQL)
+		code, body, err := c2.get("/v1/inboxes")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		for _, inbox := range listOf(body, "inboxes") {
+			if str(asMap(inbox), "id") == pod1InboxID {
+				t.Errorf("pod-2-scoped key should not see pod-1 inbox in list, but found it: %v", inbox)
+			}
+		}
+	})
+}
+
+// ── nGX-mde: Parent-path integrity ───────────────────────────────────────────
+
+// TestParentPathIntegrity verifies that nested routes check parent-path
+// ownership — e.g. a thread belonging to inbox1 cannot be accessed via
+// inbox2's path, and a message belonging to thread1 cannot be accessed via
+// thread2's path.
+func TestParentPathIntegrity(t *testing.T) {
+	c := newClient(t)
+
+	// Create two inboxes.
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("ppi-inbox1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inbox1ID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inbox1ID) }) //nolint
+
+	code, body, err = c.post("/v1/inboxes", map[string]any{"address": uniqueName("ppi-inbox2")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inbox2ID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inbox2ID) }) //nolint
+
+	// Send a message to inbox1 — creates thread1 containing message1.
+	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inbox1ID), map[string]any{
+		"to":        []map[string]any{{"email": "ppi-test@example.com"}},
+		"subject":   "Parent path integrity test " + uniqueName("t"),
+		"body_text": "Testing parent-path integrity",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	thread1ID := mustStr(t, body, "thread_id")
+	message1ID := mustStr(t, body, "id")
+
+	// Create a draft in inbox1.
+	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/drafts", inbox1ID), map[string]any{
+		"to":        []map[string]any{{"email": "ppi-draft@example.com"}},
+		"subject":   "Parent path integrity draft",
+		"body_text": "Draft for ppi test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	draft1ID := mustStr(t, body, "id")
+
+	t.Run("thread_wrong_inbox_returns_404", func(t *testing.T) {
+		// thread1 belongs to inbox1; accessing it via inbox2 should be 404.
+		code, body, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s", inbox2ID, thread1ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 404 {
+			t.Errorf("expected 404 for thread1 accessed via inbox2, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("message_wrong_thread_returns_404", func(t *testing.T) {
+		// Send a second message to inbox1 — creates thread2.
+		code, body, err := c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inbox1ID), map[string]any{
+			"to":        []map[string]any{{"email": "ppi-test2@example.com"}},
+			"subject":   "Parent path integrity test 2 " + uniqueName("t"),
+			"body_text": "Thread 2 for ppi test",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		thread2ID := mustStr(t, body, "thread_id")
+
+		// message1 is in thread1; accessing it via thread2 should be 404.
+		code, body, err = c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inbox1ID, thread2ID, message1ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 404 {
+			t.Errorf("expected 404 for message1 accessed via thread2, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("draft_wrong_inbox_returns_404", func(t *testing.T) {
+		// draft1 belongs to inbox1; accessing it via inbox2 should be 404.
+		code, body, err := c.get(fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inbox2ID, draft1ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 404 {
+			t.Errorf("expected 404 for draft1 accessed via inbox2, got %d: %v", code, body)
+		}
+	})
+}

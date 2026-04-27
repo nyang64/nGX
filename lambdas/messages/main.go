@@ -107,6 +107,9 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			if err != nil {
 				return shared.Error(404, "message not found"), nil
 			}
+			if msg.ThreadID != threadID {
+				return shared.Error(404, "message not found"), nil
+			}
 			return shared.JSON(200, msg), nil
 		case "PATCH":
 			if !claims.HasScope(authpkg.ScopeInboxWrite) {
@@ -134,6 +137,9 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			if err != nil {
 				return shared.Error(404, "message not found"), nil
 			}
+			if msg.ThreadID != threadID {
+				return shared.Error(404, "message not found"), nil
+			}
 			return shared.JSON(200, msg), nil
 		}
 
@@ -141,6 +147,14 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 		if event.HTTPMethod == "GET" {
 			if !claims.HasScope(authpkg.ScopeInboxRead) {
 				return shared.Error(403, "insufficient scope"), nil
+			}
+			// Verify parent-path integrity before fetching raw content.
+			msg, err := messageSv.Get(ctx, claims, messageID)
+			if err != nil {
+				return shared.Error(404, "raw message not found"), nil
+			}
+			if msg.ThreadID != threadID {
+				return shared.Error(404, "raw message not found"), nil
 			}
 			data, err := messageSv.GetRaw(ctx, claims, messageID)
 			if err != nil {
@@ -153,6 +167,14 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 		if event.HTTPMethod == "GET" {
 			if !claims.HasScope(authpkg.ScopeInboxRead) {
 				return shared.Error(403, "insufficient scope"), nil
+			}
+			// Verify parent-path integrity before fetching attachment.
+			msg, err := messageSv.Get(ctx, claims, messageID)
+			if err != nil {
+				return shared.Error(404, "attachment not found"), nil
+			}
+			if msg.ThreadID != threadID {
+				return shared.Error(404, "attachment not found"), nil
 			}
 			attachmentID, _ := uuid.Parse(event.PathParameters["attachmentId"])
 			att, data, err := messageSv.GetAttachmentContent(ctx, claims, messageID, attachmentID)
@@ -167,6 +189,14 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 		if event.HTTPMethod == "POST" {
 			if !claims.HasScope(authpkg.ScopeInboxWrite) {
 				return shared.Error(403, "insufficient scope"), nil
+			}
+			// Verify parent-path integrity before sending reply.
+			orig, err := messageSv.Get(ctx, claims, messageID)
+			if err != nil {
+				return shared.Error(404, "message not found"), nil
+			}
+			if orig.ThreadID != threadID {
+				return shared.Error(404, "message not found"), nil
 			}
 			var req inboxsvc.ReplyAllRequest
 			if err := shared.Decode(event, &req); err != nil {
@@ -183,6 +213,14 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 		if event.HTTPMethod == "POST" {
 			if !claims.HasScope(authpkg.ScopeInboxWrite) {
 				return shared.Error(403, "insufficient scope"), nil
+			}
+			// Verify parent-path integrity before forwarding.
+			orig, err := messageSv.Get(ctx, claims, messageID)
+			if err != nil {
+				return shared.Error(404, "message not found"), nil
+			}
+			if orig.ThreadID != threadID {
+				return shared.Error(404, "message not found"), nil
 			}
 			var req inboxsvc.ForwardRequest
 			if err := shared.Decode(event, &req); err != nil {

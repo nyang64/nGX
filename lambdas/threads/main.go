@@ -118,10 +118,21 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			if err != nil {
 				return shared.Error(404, "thread not found"), nil
 			}
+			if thread.InboxID != inboxID {
+				return shared.Error(404, "thread not found"), nil
+			}
 			return shared.JSON(200, thread), nil
 		case "PATCH":
 			if !claims.HasScope(authpkg.ScopeInboxWrite) {
 				return shared.Error(403, "insufficient scope"), nil
+			}
+			// Verify parent-path integrity: thread must belong to the stated inbox.
+			thread, err := threadSv.Get(ctx, claims, threadID)
+			if err != nil {
+				return shared.Error(404, "thread not found"), nil
+			}
+			if thread.InboxID != inboxID {
+				return shared.Error(404, "thread not found"), nil
 			}
 			var req struct {
 				Status    *string `json:"status"`
@@ -157,6 +168,13 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 	case "/v1/inboxes/{inboxId}/threads/{threadId}/labels/{labelId}":
 		if !claims.HasScope(authpkg.ScopeInboxWrite) {
 			return shared.Error(403, "insufficient scope"), nil
+		}
+		// Verify parent-path integrity: thread must belong to the stated inbox.
+		{
+			th, err := threadSv.Get(ctx, claims, threadID)
+			if err != nil || th.InboxID != inboxID {
+				return shared.Error(404, "thread not found"), nil
+			}
 		}
 		switch event.HTTPMethod {
 		case "PUT":

@@ -9,6 +9,8 @@ package main
 
 import (
 	"context"
+	"log/slog"
+	"os"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -18,18 +20,29 @@ import (
 
 	"agentmail/lambdas/shared"
 	authpkg "agentmail/pkg/auth"
+	"agentmail/pkg/crypto"
 	"agentmail/pkg/models"
 	whstore "agentmail/services/webhook-service/store"
 )
 
 var (
-	pool *pgxpool.Pool
-	whs  *whstore.DeliveryStore
+	pool   *pgxpool.Pool
+	whs    *whstore.DeliveryStore
+	encKey []byte
 )
 
 func init() {
 	pool = shared.InitDB()
 	whs = whstore.NewDeliveryStore(pool)
+	keyHex := os.Getenv("WEBHOOK_ENCRYPTION_KEY")
+	if keyHex != "" {
+		var err error
+		encKey, err = crypto.KeyFromHex(keyHex)
+		if err != nil {
+			slog.Error("webhooks: invalid WEBHOOK_ENCRYPTION_KEY", "error", err)
+			os.Exit(1)
+		}
+	}
 }
 
 func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
@@ -51,7 +64,11 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			if err != nil {
 				return shared.Error(500, err.Error()), nil
 			}
-			return shared.JSON(200, map[string]any{"webhooks": hooks}), nil
+			respHooks := make([]map[string]any, len(hooks))
+			for i, h := range hooks {
+				respHooks[i] = webhookResponse(h)
+			}
+			return shared.JSON(200, map[string]any{"webhooks": respHooks}), nil
 		case "POST":
 			if !claims.HasScope(authpkg.ScopeWebhookWrite) {
 				return shared.Error(403, "insufficient scope"), nil
@@ -74,10 +91,25 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 				CreatedAt: time.Now().UTC(),
 				UpdatedAt: time.Now().UTC(),
 			}
+			if req.AuthHeader != nil {
+				name, ok1 := req.AuthHeader["name"]
+				value, ok2 := req.AuthHeader["value"]
+				if ok1 && ok2 && name != "" && value != "" {
+					if encKey == nil {
+						return shared.Error(500, "webhook encryption not configured"), nil
+					}
+					enc, err := crypto.Encrypt(encKey, []byte(value))
+					if err != nil {
+						return shared.Error(500, "failed to encrypt auth header"), nil
+					}
+					hook.AuthHeaderName = &name
+					hook.AuthHeaderValueEnc = enc
+				}
+			}
 			if err := whs.CreateWebhook(ctx, hook); err != nil {
 				return shared.Error(400, err.Error()), nil
 			}
-			return shared.JSON(201, hook), nil
+			return shared.JSON(201, webhookResponse(hook)), nil
 		}
 
 	case "/v1/webhooks/{webhookId}":
@@ -90,7 +122,7 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			if err != nil {
 				return shared.Error(404, "webhook not found"), nil
 			}
-			return shared.JSON(200, hook), nil
+			return shared.JSON(200, webhookResponse(hook)), nil
 		case "PATCH":
 			if !claims.HasScope(authpkg.ScopeWebhookWrite) {
 				return shared.Error(403, "insufficient scope"), nil
@@ -120,7 +152,7 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			if err := whs.UpdateWebhook(ctx, hook); err != nil {
 				return shared.Error(400, err.Error()), nil
 			}
-			return shared.JSON(200, hook), nil
+			return shared.JSON(200, webhookResponse(hook)), nil
 		case "DELETE":
 			if !claims.HasScope(authpkg.ScopeWebhookWrite) {
 				return shared.Error(403, "insufficient scope"), nil
@@ -145,6 +177,29 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 	}
 
 	return shared.Error(404, "not found"), nil
+}
+
+// webhookResponse builds the JSON response for a webhook, exposing auth_header_name
+// but never auth_header_value (write-only field).
+func webhookResponse(wh *models.Webhook) map[string]any {
+	resp := map[string]any{
+		"id":              wh.ID,
+		"org_id":          wh.OrgID,
+		"url":             wh.URL,
+		"events":          wh.Events,
+		"pod_id":          wh.PodID,
+		"inbox_id":        wh.InboxID,
+		"is_active":       wh.IsActive,
+		"failure_count":   wh.FailureCount,
+		"last_success_at": wh.LastSuccessAt,
+		"last_failure_at": wh.LastFailureAt,
+		"created_at":      wh.CreatedAt,
+		"updated_at":      wh.UpdatedAt,
+	}
+	if wh.AuthHeaderName != nil {
+		resp["auth_header_name"] = *wh.AuthHeaderName
+	}
+	return resp
 }
 
 func main() {

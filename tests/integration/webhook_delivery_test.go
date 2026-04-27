@@ -386,6 +386,54 @@ func startReceiver(t *testing.T, secret string, ch chan<- webhookPayload, reject
 	return ln.Addr().String(), func() { srv.Close() }
 }
 
+// TestWebhookAuthHeader verifies that auth_header (name+value) can be stored on
+// a webhook and that:
+//   - GET /v1/webhooks/{id} exposes auth_header_name in the response
+//   - auth_header_value is NOT present in the response (write-only)
+func TestWebhookAuthHeader(t *testing.T) {
+	c := newClient(t)
+
+	// Create a webhook with an auth_header.
+	code, body, err := c.post("/v1/webhooks", map[string]any{
+		"url":    "https://httpbin.org/post",
+		"events": []string{"message.sent"},
+		"auth_header": map[string]string{
+			"name":  "X-Custom-Auth",
+			"value": "secret-token-123",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	webhookID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/webhooks/" + webhookID) }) //nolint
+
+	// GET the webhook and assert auth_header_name is present.
+	code, body, err = c.get("/v1/webhooks/" + webhookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 200, body)
+
+	authHeaderName, hasName := body["auth_header_name"]
+	if !hasName {
+		t.Fatal("GET /v1/webhooks/{id}: expected auth_header_name in response, but it was absent")
+	}
+	if authHeaderName != "X-Custom-Auth" {
+		t.Fatalf("auth_header_name: got %q, want %q", authHeaderName, "X-Custom-Auth")
+	}
+
+	// Assert auth_header_value is NOT present (write-only).
+	if _, hasValue := body["auth_header_value"]; hasValue {
+		t.Fatal("GET /v1/webhooks/{id}: auth_header_value must not be exposed in the response (write-only)")
+	}
+	if _, hasValue := body["auth_header_value_enc"]; hasValue {
+		t.Fatal("GET /v1/webhooks/{id}: auth_header_value_enc must not be exposed in the response")
+	}
+	t.Logf("auth_header_name=%q correctly returned; auth_header_value correctly absent", authHeaderName)
+}
+
 // verifyWebhookSignature checks HMAC-SHA256: expected format is
 // "sha256=<hex>" matching HMAC-SHA256(secret, body).
 func verifyWebhookSignature(secret string, body []byte, sigHeader string) bool {

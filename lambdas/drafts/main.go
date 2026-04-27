@@ -107,10 +107,21 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			if err != nil {
 				return shared.Error(404, "draft not found"), nil
 			}
+			if draft.InboxID != inboxID {
+				return shared.Error(404, "draft not found"), nil
+			}
 			return shared.JSON(200, draft), nil
 		case "PATCH":
 			if !claims.HasScope(authpkg.ScopeDraftWrite) {
 				return shared.Error(403, "insufficient scope"), nil
+			}
+			// Verify parent-path integrity before updating.
+			existing, err := draftSv.Get(ctx, claims, draftID)
+			if err != nil {
+				return shared.Error(404, "draft not found"), nil
+			}
+			if existing.InboxID != inboxID {
+				return shared.Error(404, "draft not found"), nil
 			}
 			var req inboxsvc.UpdateDraftRequest
 			if err := shared.Decode(event, &req); err != nil {
@@ -125,6 +136,14 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			if !claims.HasScope(authpkg.ScopeDraftWrite) {
 				return shared.Error(403, "insufficient scope"), nil
 			}
+			// Verify parent-path integrity before deleting.
+			existing, err := draftSv.Get(ctx, claims, draftID)
+			if err != nil {
+				return shared.Error(404, "draft not found"), nil
+			}
+			if existing.InboxID != inboxID {
+				return shared.Error(404, "draft not found"), nil
+			}
 			if err := draftSv.Delete(ctx, claims, draftID); err != nil {
 				return shared.Error(404, "draft not found"), nil
 			}
@@ -135,6 +154,14 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 		if event.HTTPMethod == "POST" {
 			if !claims.HasScope(authpkg.ScopeDraftWrite) {
 				return shared.Error(403, "insufficient scope"), nil
+			}
+			// Verify parent-path integrity before approving.
+			existing, err := draftSv.Get(ctx, claims, draftID)
+			if err != nil {
+				return shared.Error(404, "draft not found"), nil
+			}
+			if existing.InboxID != inboxID {
+				return shared.Error(404, "draft not found"), nil
 			}
 			var req struct {
 				Note string `json:"note"`
@@ -151,6 +178,14 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 		if event.HTTPMethod == "POST" {
 			if !claims.HasScope(authpkg.ScopeDraftWrite) {
 				return shared.Error(403, "insufficient scope"), nil
+			}
+			// Verify parent-path integrity before rejecting.
+			existing, err := draftSv.Get(ctx, claims, draftID)
+			if err != nil {
+				return shared.Error(404, "draft not found"), nil
+			}
+			if existing.InboxID != inboxID {
+				return shared.Error(404, "draft not found"), nil
 			}
 			var req struct {
 				Reason string `json:"reason"`
