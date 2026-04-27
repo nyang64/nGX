@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -96,6 +97,9 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 		}
 		threads, nextCursor, err := threadSv.List(ctx, claims, q)
 		if err != nil {
+			if strings.Contains(err.Error(), "invalid cursor") {
+				return shared.Error(400, "invalid cursor"), nil
+			}
 			return shared.Error(500, err.Error()), nil
 		}
 		resp := map[string]any{"threads": threads}

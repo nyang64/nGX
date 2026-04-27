@@ -28,11 +28,22 @@ func TestOrg(t *testing.T) {
 	})
 
 	t.Run("patch", func(t *testing.T) {
-		code, body, err := c.patch("/v1/org", map[string]any{"name": "nyklabs"})
+		newName := uniqueName("org-name")
+		code, body, err := c.patch("/v1/org", map[string]any{"name": newName})
 		if err != nil {
 			t.Fatal(err)
 		}
 		mustCode(t, code, 200, body)
+
+		// Read-after-write: GET /org must reflect the updated name.
+		code2, body2, err := c.get("/v1/org")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code2, 200, body2)
+		if got := str(body2, "name"); got != newName {
+			t.Errorf("read-after-write: expected name %q, got %q", newName, got)
+		}
 	})
 }
 

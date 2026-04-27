@@ -11,6 +11,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -74,6 +75,9 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			}
 			drafts, _, err := draftSv.List(ctx, claims, inboxID, 50, event.QueryStringParameters["cursor"])
 			if err != nil {
+				if strings.Contains(err.Error(), "invalid cursor") {
+					return shared.Error(400, "invalid cursor"), nil
+				}
 				return shared.Error(500, err.Error()), nil
 			}
 			return shared.JSON(200, map[string]any{"drafts": drafts}), nil

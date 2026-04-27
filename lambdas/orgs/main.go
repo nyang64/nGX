@@ -83,14 +83,13 @@ func patchOrg(ctx context.Context, event events.APIGatewayProxyRequest, claims *
 	if err := shared.Decode(event, &req); err != nil || req.Name == "" {
 		return shared.Error(400, "name is required"), nil
 	}
-	org, err := fetchOrg(ctx, claims.OrgID)
+	org, err := updateOrg(ctx, claims.OrgID, req.Name)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			return shared.Error(404, "organization not found"), nil
 		}
-		return shared.Error(500, "failed to get organization"), nil
+		return shared.Error(500, "failed to update organization"), nil
 	}
-	org.Name = req.Name
 	return shared.JSON(200, org), nil
 }
 
@@ -201,6 +200,21 @@ func fetchOrg(ctx context.Context, orgID uuid.UUID) (*models.Organization, error
 		return nil, fmt.Errorf("get organization: %w", err)
 	}
 	return &org, nil
+}
+
+func updateOrg(ctx context.Context, orgID uuid.UUID, name string) (*models.Organization, error) {
+	now := time.Now().UTC()
+	tag, err := pool.Exec(ctx,
+		`UPDATE organizations SET name = $1, updated_at = $2 WHERE id = $3`,
+		name, now, orgID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("update organization: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, fmt.Errorf("organization not found")
+	}
+	return fetchOrg(ctx, orgID)
 }
 
 func fetchPods(ctx context.Context, orgID uuid.UUID) ([]*models.Pod, error) {

@@ -653,6 +653,79 @@ func TestSendValidation(t *testing.T) {
 	})
 }
 
+// ── nGX-6z6: Invalid pagination cursor returns 400 ───────────────────────────
+
+// TestInvalidCursorReturns400 verifies that passing a syntactically invalid
+// base64 cursor string to list endpoints returns 400 (not 500).
+func TestInvalidCursorReturns400(t *testing.T) {
+	admin := newClient(t)
+	const badCursor = "notvalidbase64!!!"
+
+	// Create an inbox so the list endpoints have something to operate on.
+	code, body, err := admin.post("/v1/inboxes", map[string]any{"address": uniqueName("invalid-cursor")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	t.Cleanup(func() { admin.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+	// Send a message to create a thread (needed for the messages endpoint).
+	code, body, err = admin.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
+		"to":        []map[string]any{{"email": "cursor-test@example.com"}},
+		"subject":   "Invalid cursor test",
+		"body_text": "Testing invalid cursor handling",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+
+	// Retrieve the thread ID from the threads list.
+	code, body, err = admin.get(fmt.Sprintf("/v1/inboxes/%s/threads", inboxID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 200, body)
+	threads := listOf(body, "threads")
+	if len(threads) == 0 {
+		t.Fatal("expected at least one thread after sending a message")
+	}
+	threadID := str(asMap(threads[0]), "id")
+
+	t.Run("inboxes_list", func(t *testing.T) {
+		code, body, err := admin.get("/v1/inboxes?cursor=" + badCursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 400, body)
+	})
+
+	t.Run("threads_list", func(t *testing.T) {
+		code, body, err := admin.get(fmt.Sprintf("/v1/inboxes/%s/threads?cursor=%s", inboxID, badCursor))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 400, body)
+	})
+
+	t.Run("messages_list", func(t *testing.T) {
+		code, body, err := admin.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages?cursor=%s", inboxID, threadID, badCursor))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 400, body)
+	})
+
+	t.Run("drafts_list", func(t *testing.T) {
+		code, body, err := admin.get(fmt.Sprintf("/v1/inboxes/%s/drafts?cursor=%s", inboxID, badCursor))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 400, body)
+	})
+}
+
 // helper: test that a string contains a substring (for validation error messages)
 func containsStr(t *testing.T, haystack, needle string) bool {
 	t.Helper()
@@ -1071,6 +1144,109 @@ func TestSearchEdgeCases(t *testing.T) {
 		items := listOf(body, "items")
 		if len(items) != 0 {
 			t.Errorf("new inbox should have 0 search results, got %d", len(items))
+		}
+	})
+}
+
+// ── nGX-9jo: GET /inboxes?pod_id= filter ─────────────────────────────────────
+
+// TestInboxPodIDFilter verifies that an org-admin key can filter GET /inboxes
+// by pod_id and that inboxes from other pods are excluded from the results.
+func TestInboxPodIDFilter(t *testing.T) {
+	admin := newClient(t)
+
+	// Create two pods.
+	code, body, err := admin.post("/v1/pods", map[string]any{"name": "Pod Filter 1", "slug": uniqueName("pod")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	pod1ID := mustStr(t, body, "id")
+	t.Cleanup(func() { admin.delete("/v1/pods/" + pod1ID) }) //nolint
+
+	code, body, err = admin.post("/v1/pods", map[string]any{"name": "Pod Filter 2", "slug": uniqueName("pod")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	pod2ID := mustStr(t, body, "id")
+	t.Cleanup(func() { admin.delete("/v1/pods/" + pod2ID) }) //nolint
+
+	// Create an inbox in pod1.
+	code, body, err = admin.post("/v1/inboxes", map[string]any{
+		"Address": uniqueName("filter-p1"),
+		"PodID":   pod1ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inbox1ID := mustStr(t, body, "id")
+	t.Cleanup(func() { admin.delete("/v1/inboxes/" + inbox1ID) }) //nolint
+
+	// Create an inbox in pod2.
+	code, body, err = admin.post("/v1/inboxes", map[string]any{
+		"Address": uniqueName("filter-p2"),
+		"PodID":   pod2ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inbox2ID := mustStr(t, body, "id")
+	t.Cleanup(func() { admin.delete("/v1/inboxes/" + inbox2ID) }) //nolint
+
+	t.Run("filter_by_pod1_returns_only_pod1_inbox", func(t *testing.T) {
+		code, body, err := admin.get("/v1/inboxes?pod_id=" + pod1ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		inboxes := listOf(body, "inboxes")
+		foundPod1 := false
+		for _, inbox := range inboxes {
+			id := str(asMap(inbox), "id")
+			if id == inbox2ID {
+				t.Errorf("pod2 inbox %s should not appear in ?pod_id=%s results", inbox2ID, pod1ID)
+			}
+			if id == inbox1ID {
+				foundPod1 = true
+			}
+		}
+		if !foundPod1 {
+			t.Errorf("pod1 inbox %s not found in ?pod_id=%s results", inbox1ID, pod1ID)
+		}
+	})
+
+	t.Run("filter_by_pod2_returns_only_pod2_inbox", func(t *testing.T) {
+		code, body, err := admin.get("/v1/inboxes?pod_id=" + pod2ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		inboxes := listOf(body, "inboxes")
+		foundPod2 := false
+		for _, inbox := range inboxes {
+			id := str(asMap(inbox), "id")
+			if id == inbox1ID {
+				t.Errorf("pod1 inbox %s should not appear in ?pod_id=%s results", inbox1ID, pod2ID)
+			}
+			if id == inbox2ID {
+				foundPod2 = true
+			}
+		}
+		if !foundPod2 {
+			t.Errorf("pod2 inbox %s not found in ?pod_id=%s results", inbox2ID, pod2ID)
+		}
+	})
+
+	t.Run("invalid_pod_id_returns_400", func(t *testing.T) {
+		code, _, err := admin.get("/v1/inboxes?pod_id=not-a-uuid")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("invalid pod_id should return 400, got %d", code)
 		}
 	})
 }
