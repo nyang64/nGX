@@ -88,11 +88,39 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 		}
 
 	case "/v1/inboxes/{inboxId}/threads/{threadId}/messages/{messageId}":
-		if event.HTTPMethod == "GET" {
+		switch event.HTTPMethod {
+		case "GET":
 			if !claims.HasScope(authpkg.ScopeInboxRead) {
 				return shared.Error(403, "insufficient scope"), nil
 			}
 			msg, err := messageSv.Get(ctx, claims, messageID)
+			if err != nil {
+				return shared.Error(404, "message not found"), nil
+			}
+			return shared.JSON(200, msg), nil
+		case "PATCH":
+			if !claims.HasScope(authpkg.ScopeInboxWrite) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
+			var req struct {
+				Unread   *bool          `json:"unread"`
+				Starred  *bool          `json:"starred"`
+				Metadata map[string]any `json:"metadata"`
+			}
+			if err := shared.Decode(event, &req); err != nil {
+				return shared.Error(400, "invalid request body"), nil
+			}
+			patch := inboxstore.MessagePatch{
+				IsRead:    req.Unread,
+				IsStarred: req.Starred,
+				Metadata:  req.Metadata,
+			}
+			// unread=true means is_read=false and vice versa.
+			if req.Unread != nil {
+				v := !*req.Unread
+				patch.IsRead = &v
+			}
+			msg, err := messageSv.UpdateMessage(ctx, claims, messageID, patch)
 			if err != nil {
 				return shared.Error(404, "message not found"), nil
 			}

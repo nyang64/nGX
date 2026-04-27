@@ -143,6 +143,20 @@ func (s *MessageService) Get(ctx context.Context, claims *auth.Claims, messageID
 	return msg, nil
 }
 
+// UpdateMessage applies a patch to a message's mutable fields.
+func (s *MessageService) UpdateMessage(ctx context.Context, claims *auth.Claims, messageID uuid.UUID, patch store.MessagePatch) (*models.Message, error) {
+	var msg *models.Message
+	err := dbpkg.WithOrgTx(ctx, s.pool, claims.OrgID, func(tx pgx.Tx) error {
+		var err error
+		msg, err = s.messageStore.UpdateMessage(ctx, tx, claims.OrgID, messageID, patch)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("update message: %w", err)
+	}
+	return msg, nil
+}
+
 const maxAttachmentBytes = 10 * 1024 * 1024 // 10 MiB
 
 // Send creates an outbound message and publishes it to the email outbound queue.

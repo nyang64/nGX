@@ -60,6 +60,11 @@ type Message struct {
 	// Metadata is a caller-supplied key→value store. DB column: metadata JSONB.
 	Metadata map[string]any `json:"metadata,omitempty" db:"metadata"`
 
+	// IsRead indicates whether the message has been read.
+	IsRead    bool `json:"is_read"    db:"is_read"`
+	// IsStarred indicates whether the message has been starred.
+	IsStarred bool `json:"is_starred" db:"is_starred"`
+
 	// HasAttachments is true when the message has at least one attachment.
 	HasAttachments bool `json:"has_attachments" db:"has_attachments"`
 

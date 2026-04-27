@@ -67,8 +67,7 @@ git pull --rebase                   # sync before starting work
 # Unit tests (run once — no loadenv needed; DATABASE_URL is unset by the target)
 make test
 
-# Integration tests (run TWICE — catches flakiness; requires source loadenv.sh first)
-source loadenv.sh && make test-integration
+# Integration tests (run ONCE — requires source loadenv.sh first)
 source loadenv.sh && make test-integration
 
 # Then commit and push

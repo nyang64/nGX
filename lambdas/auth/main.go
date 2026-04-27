@@ -192,7 +192,7 @@ func fetchKey(ctx context.Context, orgID, keyID uuid.UUID) (*models.APIKey, erro
 			SELECT id, org_id, name, key_prefix, key_hash, scopes, pod_id,
 			       last_used_at, expires_at, revoked_at, created_at
 			FROM api_keys
-			WHERE id = $1 AND org_id = $2`
+			WHERE id = $1 AND org_id = $2 AND revoked_at IS NULL`
 		k := &models.APIKey{}
 		row := tx.QueryRow(ctx, q, keyID, orgID)
 		if err := row.Scan(
