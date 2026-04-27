@@ -9,13 +9,16 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
 	sqssdk "github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"agentmail/lambdas/shared"
@@ -61,14 +64,37 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			if !claims.HasScope(authpkg.ScopeInboxRead) {
 				return shared.Error(403, "insufficient scope"), nil
 			}
-			inboxes, _, err := inboxSv.List(ctx, claims, claims.PodID, 50, event.QueryStringParameters["cursor"])
+			// For org-admin keys, honour the ?pod_id= query param as a filter.
+			// Pod-scoped keys already enforce their own pod via claims.PodID inside the service.
+			podID := claims.PodID
+			if podID == nil {
+				if raw := event.QueryStringParameters["pod_id"]; raw != "" {
+					if id, err := uuid.Parse(raw); err == nil {
+						podID = &id
+					} else {
+						return shared.Error(400, "invalid pod_id"), nil
+					}
+				}
+			}
+			limit := 0
+			if l := event.QueryStringParameters["limit"]; l != "" {
+				fmt.Sscanf(l, "%d", &limit)
+			}
+			inboxes, nextCursor, err := inboxSv.List(ctx, claims, podID, limit, event.QueryStringParameters["cursor"])
 			if err != nil {
+				if strings.Contains(err.Error(), "invalid cursor") {
+					return shared.Error(400, "invalid cursor"), nil
+				}
 				return shared.Error(500, err.Error()), nil
 			}
 			if inboxes == nil {
 				inboxes = []*models.Inbox{}
 			}
-			return shared.JSON(200, map[string]any{"inboxes": inboxes}), nil
+			resp := map[string]any{"inboxes": inboxes}
+			if nextCursor != "" {
+				resp["next_cursor"] = nextCursor
+			}
+			return shared.JSON(200, resp), nil
 		case "POST":
 			if !claims.HasScope(authpkg.ScopeInboxWrite) {
 				return shared.Error(403, "insufficient scope"), nil

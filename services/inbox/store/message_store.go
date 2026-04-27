@@ -21,13 +21,22 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// MessagePatch contains optional fields that can be updated on a message.
+type MessagePatch struct {
+	IsRead    *bool
+	IsStarred *bool
+	Metadata  map[string]any
+}
+
 // MessageStore defines data access for messages.
 type MessageStore interface {
 	Create(ctx context.Context, tx pgx.Tx, msg *models.Message) error
 	GetByID(ctx context.Context, tx pgx.Tx, orgID, messageID uuid.UUID) (*models.Message, error)
 	List(ctx context.Context, tx pgx.Tx, orgID, threadID uuid.UUID, limit int, cursor string) ([]*models.Message, string, error)
 	UpdateStatus(ctx context.Context, tx pgx.Tx, orgID, messageID uuid.UUID, status models.MessageStatus) error
+	UpdateMessage(ctx context.Context, tx pgx.Tx, orgID, messageID uuid.UUID, patch MessagePatch) (*models.Message, error)
 	CreateAttachment(ctx context.Context, tx pgx.Tx, att *models.Attachment) error
+	GetAttachmentByID(ctx context.Context, tx pgx.Tx, orgID, messageID, attachmentID uuid.UUID) (*models.Attachment, error)
 	ListAttachments(ctx context.Context, tx pgx.Tx, orgID, messageID uuid.UUID) ([]*models.Attachment, error)
 	CreateDraftAttachment(ctx context.Context, tx pgx.Tx, att *models.Attachment) error
 	ListDraftAttachments(ctx context.Context, tx pgx.Tx, orgID, draftID uuid.UUID) ([]*models.Attachment, error)
@@ -109,7 +118,7 @@ func (s *PostgresMessageStore) GetByID(ctx context.Context, tx pgx.Tx, orgID, me
 		       to_addresses, cc_addresses, bcc_addresses,
 		       reply_to, subject,
 		       body_text_key, body_html_key, raw_key,
-		       size_bytes, has_attachments, headers, metadata,
+		       size_bytes, is_read, is_starred, has_attachments, headers, metadata,
 		       sent_at, received_at,
 		       created_at, updated_at
 		FROM messages
@@ -146,7 +155,7 @@ func (s *PostgresMessageStore) List(ctx context.Context, tx pgx.Tx, orgID, threa
 		       to_addresses, cc_addresses, bcc_addresses,
 		       reply_to, subject,
 		       body_text_key, body_html_key, raw_key,
-		       size_bytes, has_attachments, headers, metadata,
+		       size_bytes, is_read, is_starred, has_attachments, headers, metadata,
 		       sent_at, received_at,
 		       created_at, updated_at
 		FROM messages
@@ -193,6 +202,65 @@ func (s *PostgresMessageStore) UpdateStatus(ctx context.Context, tx pgx.Tx, orgI
 	return nil
 }
 
+// UpdateMessage applies patch fields to a message and returns the updated message.
+func (s *PostgresMessageStore) UpdateMessage(ctx context.Context, tx pgx.Tx, orgID, messageID uuid.UUID, patch MessagePatch) (*models.Message, error) {
+	setClauses := []string{}
+	args := []any{}
+	argIdx := 1
+
+	if patch.IsRead != nil {
+		setClauses = append(setClauses, fmt.Sprintf("is_read = $%d", argIdx))
+		args = append(args, *patch.IsRead)
+		argIdx++
+	}
+	if patch.IsStarred != nil {
+		setClauses = append(setClauses, fmt.Sprintf("is_starred = $%d", argIdx))
+		args = append(args, *patch.IsStarred)
+		argIdx++
+	}
+	if patch.Metadata != nil {
+		metadataJSON, _ := json.Marshal(patch.Metadata)
+		setClauses = append(setClauses, fmt.Sprintf("metadata = $%d", argIdx))
+		args = append(args, metadataJSON)
+		argIdx++
+	}
+	if len(setClauses) == 0 {
+		return s.GetByID(ctx, tx, orgID, messageID)
+	}
+
+	setClauses = append(setClauses, "updated_at = NOW()")
+	args = append(args, orgID, messageID)
+
+	q := fmt.Sprintf(`
+		UPDATE messages SET %s
+		WHERE org_id = $%d AND id = $%d
+		RETURNING id, org_id, inbox_id, thread_id,
+		          message_id_header, in_reply_to, references_header,
+		          direction, status,
+		          from_address, from_name,
+		          to_addresses, cc_addresses, bcc_addresses,
+		          reply_to, subject,
+		          body_text_key, body_html_key, raw_key,
+		          size_bytes, is_read, is_starred, has_attachments, headers, metadata,
+		          sent_at, received_at,
+		          created_at, updated_at`,
+		joinMessageClauses(setClauses), argIdx, argIdx+1)
+
+	row := tx.QueryRow(ctx, q, args...)
+	return scanMessage(row)
+}
+
+func joinMessageClauses(parts []string) string {
+	result := ""
+	for i, p := range parts {
+		if i > 0 {
+			result += ", "
+		}
+		result += p
+	}
+	return result
+}
+
 // CreateAttachment inserts an attachment record linked to a message.
 func (s *PostgresMessageStore) CreateAttachment(ctx context.Context, tx pgx.Tx, att *models.Attachment) error {
 	q := `
@@ -210,6 +278,23 @@ func (s *PostgresMessageStore) CreateAttachment(ctx context.Context, tx pgx.Tx, 
 		return fmt.Errorf("insert attachment: %w", err)
 	}
 	return nil
+}
+
+// GetAttachmentByID returns a single attachment belonging to the given message.
+func (s *PostgresMessageStore) GetAttachmentByID(ctx context.Context, tx pgx.Tx, orgID, messageID, attachmentID uuid.UUID) (*models.Attachment, error) {
+	q := `
+		SELECT id, org_id, message_id, draft_id, filename, content_type, size_bytes, s3_key, content_id, is_inline, created_at
+		FROM attachments
+		WHERE org_id = $1 AND message_id = $2 AND id = $3
+	`
+	var a models.Attachment
+	err := tx.QueryRow(ctx, q, orgID, messageID, attachmentID).Scan(
+		&a.ID, &a.OrgID, &a.MessageID, &a.DraftID, &a.Filename, &a.ContentType, &a.SizeBytes, &a.S3Key, &a.ContentID, &a.Inline, &a.CreatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get attachment: %w", err)
+	}
+	return &a, nil
 }
 
 // ListAttachments returns all attachments for a message.
@@ -312,7 +397,7 @@ func scanMessage(row pgx.Row) (*models.Message, error) {
 		&toJSON, &ccJSON, &bccJSON,
 		&m.ReplyTo, &m.Subject,
 		&m.TextS3Key, &m.HtmlS3Key, &m.RawS3Key,
-		&m.SizeBytes, &m.HasAttachments, &headersJSON, &metadataJSON,
+		&m.SizeBytes, &m.IsRead, &m.IsStarred, &m.HasAttachments, &headersJSON, &metadataJSON,
 		&m.SentAt, &m.ReceivedAt,
 		&m.CreatedAt, &m.UpdatedAt,
 	)
@@ -338,7 +423,7 @@ func scanMessageRows(rows pgx.Rows) (*models.Message, error) {
 		&toJSON, &ccJSON, &bccJSON,
 		&m.ReplyTo, &m.Subject,
 		&m.TextS3Key, &m.HtmlS3Key, &m.RawS3Key,
-		&m.SizeBytes, &m.HasAttachments, &headersJSON, &metadataJSON,
+		&m.SizeBytes, &m.IsRead, &m.IsStarred, &m.HasAttachments, &headersJSON, &metadataJSON,
 		&m.SentAt, &m.ReceivedAt,
 		&m.CreatedAt, &m.UpdatedAt,
 	)

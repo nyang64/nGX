@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"agentmail/lambdas/shared"
+	authpkg "agentmail/pkg/auth"
 	"agentmail/pkg/models"
 	domsvc "agentmail/services/domains/service"
 	domstore "agentmail/services/domains/store"
@@ -55,6 +56,10 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 	claims, err := shared.ExtractClaims(event)
 	if err != nil {
 		return shared.Error(401, "unauthorized"), nil
+	}
+
+	if !claims.HasScope(authpkg.ScopeOrgAdmin) {
+		return shared.Error(403, "insufficient scope"), nil
 	}
 
 	switch event.Resource {

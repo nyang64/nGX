@@ -629,3 +629,213 @@ func buildS3EventPayload(bucket, key string) []byte {
 	}`, time.Now().UTC().Format(time.RFC3339), bucket, bucket, encodedKey)
 	return []byte(payload)
 }
+
+// ── nGX-829: BCC field behavior ───────────────────────────────────────────────
+
+// TestBCCField verifies that BCC recipients are stored on the message record
+// but not exposed in MIME headers when the email is delivered.
+func TestBCCField(t *testing.T) {
+	c := newClient(t)
+
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("bcc")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
+		"to":        []map[string]any{{"email": "success@simulator.amazonses.com"}},
+		"bcc":       []map[string]any{{"email": "bcc-recipient@example.com"}},
+		"subject":   "BCC test " + uniqueName("subj"),
+		"body_text": "BCC integration test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	msgID := mustStr(t, body, "id")
+	threadID := mustStr(t, body, "thread_id")
+
+	// BCC field should be present in the API response.
+	t.Run("bcc_field_in_api_response", func(t *testing.T) {
+		code, body, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		bcc := listOf(body, "bcc")
+		if len(bcc) == 0 {
+			t.Fatal("expected bcc field to be present and non-empty in message response")
+		}
+		firstBCC := asMap(bcc[0])
+		if got := str(firstBCC, "email"); got != "bcc-recipient@example.com" {
+			t.Errorf("expected bcc email bcc-recipient@example.com, got %q", got)
+		}
+	})
+
+	// BCC should not appear in raw MIME headers.
+	t.Run("bcc_not_in_raw_headers", func(t *testing.T) {
+		// Poll until message is sent (raw headers available after delivery).
+		ok := pollUntil(t, 30*time.Second, 2*time.Second, func() bool {
+			_, b, _ := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
+			s := str(b, "status")
+			return s == "sent" || s == "queued" || s == "accepted"
+		})
+		if !ok {
+			t.Skip("message did not reach sent/queued/accepted within 30s; skipping raw header check")
+		}
+		// The GET /messages/{id} response includes headers — BCC must not be present.
+		_, body, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Check the raw headers field if available.
+		if raw, ok := body["headers"].(map[string]any); ok {
+			for k := range raw {
+				if strings.EqualFold(k, "bcc") {
+					t.Errorf("BCC header must not appear in delivered message headers: found key %q", k)
+				}
+			}
+		}
+	})
+}
+
+// ── nGX-lih: Inbound multipart/alternative (HTML+text) email ─────────────────
+
+// TestInboundEmailHTMLBody verifies that an inbound multipart/alternative email
+// (text/plain + text/html parts) is stored with both body_text and body_html populated.
+func TestInboundEmailHTMLBody(t *testing.T) {
+	c := newClient(t)
+
+	bucketName := os.Getenv("TEST_S3_BUCKET_EMAILS")
+	lambdaPrefix := os.Getenv("TEST_LAMBDA_PREFIX")
+	awsRegion := os.Getenv("TEST_AWS_REGION")
+	if bucketName == "" || lambdaPrefix == "" || awsRegion == "" {
+		t.Skip("TEST_S3_BUCKET_EMAILS, TEST_LAMBDA_PREFIX, and TEST_AWS_REGION must be set")
+	}
+
+	addr := uniqueName("html-inbound")
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": addr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	inboxEmail := str(body, "email")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+	subject := "HTML inbound test " + uniqueName("subj")
+	textBody := "Plain text part of the email."
+	htmlBody := "<html><body><p>HTML part of the email.</p></body></html>"
+	rawEML := buildAlternativeEML("success@simulator.amazonses.com", inboxEmail, subject, textBody, htmlBody)
+
+	ctx := context.Background()
+	awsConf, err := awscfg.LoadDefaultConfig(ctx, awscfg.WithRegion(awsRegion))
+	if err != nil {
+		t.Fatalf("load AWS config: %v", err)
+	}
+
+	s3Client := s3sdk.NewFromConfig(awsConf)
+	s3Key := fmt.Sprintf("inbound/raw/%s.eml", uniqueName("htmlmsg"))
+	_, err = s3Client.PutObject(ctx, &s3sdk.PutObjectInput{
+		Bucket:      aws.String(bucketName),
+		Key:         aws.String(s3Key),
+		Body:        bytes.NewReader(rawEML),
+		ContentType: aws.String("message/rfc822"),
+	})
+	if err != nil {
+		t.Fatalf("upload .eml to S3: %v", err)
+	}
+	t.Cleanup(func() {
+		s3Client.DeleteObject(ctx, &s3sdk.DeleteObjectInput{
+			Bucket: aws.String(bucketName),
+			Key:    aws.String(s3Key),
+		})
+	})
+
+	lambdaClient := lambdasdk.NewFromConfig(awsConf)
+	lambdaName := lambdaPrefix + "-email-inbound"
+	payload := buildS3EventPayload(bucketName, s3Key)
+	resp, err := lambdaClient.Invoke(ctx, &lambdasdk.InvokeInput{
+		FunctionName: aws.String(lambdaName),
+		Payload:      payload,
+	})
+	if err != nil {
+		t.Fatalf("invoke %s: %v", lambdaName, err)
+	}
+	if resp.FunctionError != nil {
+		t.Fatalf("lambda function error: %s — %s", *resp.FunctionError, string(resp.Payload))
+	}
+
+	// Poll until the thread appears.
+	var threadID, msgID string
+	ok := pollUntil(t, 20*time.Second, 2*time.Second, func() bool {
+		_, body, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads", inboxID))
+		if err != nil {
+			return false
+		}
+		for _, th := range listOf(body, "threads") {
+			if strings.Contains(str(asMap(th), "subject"), "HTML inbound test") {
+				threadID = str(asMap(th), "id")
+				return true
+			}
+		}
+		return false
+	})
+	if !ok {
+		t.Fatal("inbound HTML message never appeared in threads after Lambda invocation")
+	}
+
+	// Get the message ID.
+	_, threadsBody, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages", inboxID, threadID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs := listOf(threadsBody, "messages")
+	if len(msgs) == 0 {
+		t.Fatal("no messages in thread")
+	}
+	msgID = str(asMap(msgs[0]), "id")
+
+	// Assert both text and HTML S3 keys are populated (bodies stored in S3).
+	t.Run("both_body_parts_stored", func(t *testing.T) {
+		_, msgBody, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inboxID, threadID, msgID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if str(msgBody, "text_s3_key") == "" {
+			t.Error("expected text_s3_key to be set for multipart/alternative message (body_text stored in S3)")
+		}
+		if str(msgBody, "html_s3_key") == "" {
+			t.Error("expected html_s3_key to be set for multipart/alternative message (body_html stored in S3)")
+		}
+	})
+}
+
+// buildAlternativeEML constructs a multipart/alternative RFC 5322 email
+// with both text/plain and text/html parts.
+func buildAlternativeEML(from, to, subject, textBody, htmlBody string) []byte {
+	boundary := "alt_boundary_" + uniqueName("b")
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "From: %s\r\n", from)
+	fmt.Fprintf(&b, "To: %s\r\n", to)
+	fmt.Fprintf(&b, "Subject: %s\r\n", subject)
+	fmt.Fprintf(&b, "Message-ID: <%s@test.example.com>\r\n", uniqueName("msgid"))
+	fmt.Fprintf(&b, "Date: %s\r\n", time.Now().UTC().Format(time.RFC1123Z))
+	fmt.Fprintf(&b, "MIME-Version: 1.0\r\n")
+	fmt.Fprintf(&b, "Content-Type: multipart/alternative; boundary=%q\r\n", boundary)
+	fmt.Fprintf(&b, "\r\n")
+	fmt.Fprintf(&b, "--%s\r\n", boundary)
+	fmt.Fprintf(&b, "Content-Type: text/plain; charset=utf-8\r\n")
+	fmt.Fprintf(&b, "\r\n")
+	fmt.Fprintf(&b, "%s\r\n", textBody)
+	fmt.Fprintf(&b, "\r\n--%s\r\n", boundary)
+	fmt.Fprintf(&b, "Content-Type: text/html; charset=utf-8\r\n")
+	fmt.Fprintf(&b, "\r\n")
+	fmt.Fprintf(&b, "%s\r\n", htmlBody)
+	fmt.Fprintf(&b, "--%s--\r\n", boundary)
+	return []byte(b.String())
+}

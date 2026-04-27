@@ -10,6 +10,7 @@ package integration
 import (
 	"fmt"
 	"testing"
+	"time"
 )
 
 // TestOrg verifies GET and PATCH /v1/org.
@@ -28,7 +29,51 @@ func TestOrg(t *testing.T) {
 	})
 
 	t.Run("patch", func(t *testing.T) {
-		code, body, err := c.patch("/v1/org", map[string]any{"name": "nyklabs"})
+		newName := uniqueName("org-name")
+		code, body, err := c.patch("/v1/org", map[string]any{"name": newName})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+
+		// Read-after-write: GET /org must reflect the updated name.
+		code2, body2, err := c.get("/v1/org")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code2, 200, body2)
+		if got := str(body2, "name"); got != newName {
+			t.Errorf("read-after-write: expected name %q, got %q", newName, got)
+		}
+	})
+}
+
+// TestOrgPatchValidation verifies that PATCH /v1/org enforces the required name field.
+//
+// Note: the OpenAPI spec documents the PATCH /v1/org request body field as
+// "display_name" (UpdateOrganizationRequest), but the handler (lambdas/orgs/main.go)
+// actually binds json:"name". Tests use "name" to match the live handler behaviour.
+func TestOrgPatchValidation(t *testing.T) {
+	c := newClient(t)
+
+	t.Run("empty_name_returns_400", func(t *testing.T) {
+		code, body, err := c.patch("/v1/org", map[string]any{"name": ""})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 400, body)
+	})
+
+	t.Run("missing_name_returns_400", func(t *testing.T) {
+		code, body, err := c.patch("/v1/org", map[string]any{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 400, body)
+	})
+
+	t.Run("valid_name_returns_200", func(t *testing.T) {
+		code, body, err := c.patch("/v1/org", map[string]any{"name": uniqueName("org")})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -146,26 +191,121 @@ func TestAPIKeys(t *testing.T) {
 	})
 }
 
+// TestExpiredAPIKeyRejected verifies that a key with expires_at in the past is rejected with 401/403.
+// Note: API Gateway caches authorizer results for 300s per token. To avoid hitting the cache,
+// the key is NEVER used before expiry — the first (and only) request hits the authorizer cold
+// after the key has expired, ensuring the DB check runs and returns Deny.
+func TestExpiredAPIKeyRejected(t *testing.T) {
+	admin := newClient(t)
+
+	// Key expires in 3 seconds — do NOT use it before that.
+	expiresAt := time.Now().UTC().Add(3 * time.Second).Format(time.RFC3339)
+	code, body, err := admin.post("/v1/keys", map[string]any{
+		"name":       uniqueName("expkey"),
+		"scopes":     []string{"inbox:read"},
+		"expires_at": expiresAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+
+	// Verify expires_at is stored and returned.
+	if str(body, "expires_at") == "" {
+		t.Fatal("expected expires_at in key response")
+	}
+
+	plaintext := mustStr(t, body, "key")
+	keyID := mustStr(t, body, "id")
+	t.Cleanup(func() { admin.delete("/v1/keys/" + keyID) }) //nolint
+
+	expiredClient := newClientWithKey(t, plaintext)
+
+	// Wait for the key to expire (never used it before, so no authorizer cache).
+	time.Sleep(4 * time.Second)
+
+	// First ever use of this key — authorizer runs cold and finds it expired.
+	code, body, err = expiredClient.get("/v1/inboxes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 401 && code != 403 {
+		t.Fatalf("expected 401 or 403 for expired key, got %d: %v", code, body)
+	}
+}
+
 // TestLabels verifies full CRUD on /v1/labels.
 func TestLabels(t *testing.T) {
 	c := newClient(t)
 
+	labelName := uniqueName("lbl")
+	labelColor := "#aabbcc"
 	code, body, err := c.post("/v1/labels", map[string]any{
-		"name": uniqueName("lbl"), "color": "#aabbcc",
+		"name": labelName, "color": labelColor,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	mustCode(t, code, 201, body)
 	id := mustStr(t, body, "id")
+	createdAt := mustStr(t, body, "created_at")
 	t.Cleanup(func() { c.delete("/v1/labels/" + id) }) //nolint
 
-	t.Run("list", func(t *testing.T) {
-		code, body, err := c.get("/v1/labels")
+	t.Run("get", func(t *testing.T) {
+		code, got, err := c.get("/v1/labels/" + id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		mustCode(t, code, 200, body)
+		mustCode(t, code, 200, got)
+		if str(got, "id") != id {
+			t.Fatalf("label id mismatch: got %q want %q", str(got, "id"), id)
+		}
+		if str(got, "name") != labelName {
+			t.Fatalf("label name mismatch: got %q want %q", str(got, "name"), labelName)
+		}
+		if str(got, "color") != labelColor {
+			t.Fatalf("label color mismatch: got %q want %q", str(got, "color"), labelColor)
+		}
+		if str(got, "created_at") != createdAt {
+			t.Fatalf("label created_at mismatch: got %q want %q", str(got, "created_at"), createdAt)
+		}
+	})
+
+	t.Run("list", func(t *testing.T) {
+		code, got, err := c.get("/v1/labels")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, got)
+		labels := listOf(got, "labels")
+		found := false
+		for _, item := range labels {
+			lbl := asMap(item)
+			if str(lbl, "id") != id {
+				continue
+			}
+			found = true
+			if str(lbl, "name") != labelName {
+				t.Fatalf("list label name mismatch: got %q want %q", str(lbl, "name"), labelName)
+			}
+			if str(lbl, "color") != labelColor {
+				t.Fatalf("list label color mismatch: got %q want %q", str(lbl, "color"), labelColor)
+			}
+			break
+		}
+		if !found {
+			t.Fatalf("created label %q not found in list", id)
+		}
+	})
+
+	t.Run("get_nonexistent", func(t *testing.T) {
+		code, got, err := c.get("/v1/labels/00000000-0000-0000-0000-000000000000")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 404 {
+			t.Fatalf("expected 404 for nonexistent label, got %d: %v", code, got)
+		}
 	})
 
 	t.Run("patch", func(t *testing.T) {
@@ -396,6 +536,29 @@ func TestDrafts(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("cannot_approve_already_approved_draft", func(t *testing.T) {
+		code, got, err := c.post(fmt.Sprintf("/v1/inboxes/%s/drafts/%s/approve", inboxID, draftID), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 && code != 409 {
+			t.Fatalf("expected 400/409 when approving already-approved draft, got %d: %v", code, got)
+		}
+	})
+
+	t.Run("cannot_patch_approved_draft", func(t *testing.T) {
+		code, got, err := c.patch(
+			fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inboxID, draftID),
+			map[string]any{"subject": "Should Fail"},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 && code != 409 {
+			t.Fatalf("expected 400/409 when patching approved draft, got %d: %v", code, got)
+		}
+	})
 }
 
 // TestDraftRejection verifies the draft reject flow:
@@ -466,12 +629,25 @@ func TestDraftRejection(t *testing.T) {
 	})
 
 	t.Run("cannot_approve_rejected_draft", func(t *testing.T) {
-		code, _, err := c.post(fmt.Sprintf("/v1/inboxes/%s/drafts/%s/approve", inboxID, draftID), nil)
+		code, got, err := c.post(fmt.Sprintf("/v1/inboxes/%s/drafts/%s/approve", inboxID, draftID), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if code == 200 {
-			t.Fatal("expected approval to fail for a rejected draft, got 200")
+		if code != 400 && code != 409 {
+			t.Fatalf("expected 400/409 when approving rejected draft, got %d: %v", code, got)
+		}
+	})
+
+	t.Run("cannot_patch_rejected_draft", func(t *testing.T) {
+		code, got, err := c.patch(
+			fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inboxID, draftID),
+			map[string]any{"subject": "Should Fail"},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 && code != 409 {
+			t.Fatalf("expected 400/409 when patching rejected draft, got %d: %v", code, got)
 		}
 	})
 }

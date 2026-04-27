@@ -4,6 +4,8 @@ resource "aws_api_gateway_rest_api" "main" {
   name        = "${local.prefix}-api"
   description = "nGX REST API"
 
+  binary_media_types = ["application/octet-stream", "message/rfc822"]
+
   endpoint_configuration {
     types = ["REGIONAL"]
   }
@@ -134,6 +136,7 @@ resource "aws_api_gateway_deployment" "main" {
     aws_api_gateway_integration.post_v1_labels,
     aws_api_gateway_integration.options_v1_labels,
     # /v1/labels/{labelId}
+    aws_api_gateway_integration.get_v1_labels_label_id,
     aws_api_gateway_integration.patch_v1_labels_label_id,
     aws_api_gateway_integration.delete_v1_labels_label_id,
     aws_api_gateway_integration.options_v1_labels_label_id,
@@ -298,6 +301,8 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_integration.options_v1_labels.id,
       # /v1/labels/{labelId}
       aws_api_gateway_resource.v1_labels_label_id.id,
+      aws_api_gateway_method.get_v1_labels_label_id.id,
+      aws_api_gateway_integration.get_v1_labels_label_id.id,
       aws_api_gateway_method.patch_v1_labels_label_id.id,
       aws_api_gateway_integration.patch_v1_labels_label_id.id,
       aws_api_gateway_method.delete_v1_labels_label_id.id,

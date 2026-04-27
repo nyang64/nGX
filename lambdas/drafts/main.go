@@ -9,8 +9,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -20,6 +22,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"agentmail/lambdas/shared"
+	authpkg "agentmail/pkg/auth"
+	"agentmail/pkg/models"
 	s3pkg "agentmail/pkg/s3"
 	sqspkg "agentmail/pkg/sqs"
 	inboxsvc "agentmail/services/inbox/service"
@@ -68,12 +72,32 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 	case "/v1/inboxes/{inboxId}/drafts":
 		switch event.HTTPMethod {
 		case "GET":
-			drafts, _, err := draftSv.List(ctx, claims, inboxID, 50, event.QueryStringParameters["cursor"])
+			if !claims.HasScope(authpkg.ScopeDraftRead) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
+			limit := 0
+			if l := event.QueryStringParameters["limit"]; l != "" {
+				fmt.Sscanf(l, "%d", &limit)
+			}
+			drafts, nextCursor, err := draftSv.List(ctx, claims, inboxID, limit, event.QueryStringParameters["cursor"])
 			if err != nil {
+				if strings.Contains(err.Error(), "invalid cursor") {
+					return shared.Error(400, "invalid cursor"), nil
+				}
 				return shared.Error(500, err.Error()), nil
 			}
-			return shared.JSON(200, map[string]any{"drafts": drafts}), nil
+			if drafts == nil {
+				drafts = []*models.Draft{}
+			}
+			resp := map[string]any{"drafts": drafts}
+			if nextCursor != "" {
+				resp["next_cursor"] = nextCursor
+			}
+			return shared.JSON(200, resp), nil
 		case "POST":
+			if !claims.HasScope(authpkg.ScopeDraftWrite) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
 			var req inboxsvc.CreateDraftRequest
 			if err := shared.Decode(event, &req); err != nil {
 				return shared.Error(400, "invalid request body"), nil
@@ -89,12 +113,29 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 	case "/v1/inboxes/{inboxId}/drafts/{draftId}":
 		switch event.HTTPMethod {
 		case "GET":
+			if !claims.HasScope(authpkg.ScopeDraftRead) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
 			draft, err := draftSv.Get(ctx, claims, draftID)
 			if err != nil {
 				return shared.Error(404, "draft not found"), nil
 			}
+			if draft.InboxID != inboxID {
+				return shared.Error(404, "draft not found"), nil
+			}
 			return shared.JSON(200, draft), nil
 		case "PATCH":
+			if !claims.HasScope(authpkg.ScopeDraftWrite) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
+			// Verify parent-path integrity before updating.
+			existing, err := draftSv.Get(ctx, claims, draftID)
+			if err != nil {
+				return shared.Error(404, "draft not found"), nil
+			}
+			if existing.InboxID != inboxID {
+				return shared.Error(404, "draft not found"), nil
+			}
 			var req inboxsvc.UpdateDraftRequest
 			if err := shared.Decode(event, &req); err != nil {
 				return shared.Error(400, "invalid request body"), nil
@@ -105,6 +146,17 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			}
 			return shared.JSON(200, draft), nil
 		case "DELETE":
+			if !claims.HasScope(authpkg.ScopeDraftWrite) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
+			// Verify parent-path integrity before deleting.
+			existing, err := draftSv.Get(ctx, claims, draftID)
+			if err != nil {
+				return shared.Error(404, "draft not found"), nil
+			}
+			if existing.InboxID != inboxID {
+				return shared.Error(404, "draft not found"), nil
+			}
 			if err := draftSv.Delete(ctx, claims, draftID); err != nil {
 				return shared.Error(404, "draft not found"), nil
 			}
@@ -113,6 +165,17 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 
 	case "/v1/inboxes/{inboxId}/drafts/{draftId}/approve":
 		if event.HTTPMethod == "POST" {
+			if !claims.HasScope(authpkg.ScopeDraftWrite) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
+			// Verify parent-path integrity before approving.
+			existing, err := draftSv.Get(ctx, claims, draftID)
+			if err != nil {
+				return shared.Error(404, "draft not found"), nil
+			}
+			if existing.InboxID != inboxID {
+				return shared.Error(404, "draft not found"), nil
+			}
 			var req struct {
 				Note string `json:"note"`
 			}
@@ -126,6 +189,17 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 
 	case "/v1/inboxes/{inboxId}/drafts/{draftId}/reject":
 		if event.HTTPMethod == "POST" {
+			if !claims.HasScope(authpkg.ScopeDraftWrite) {
+				return shared.Error(403, "insufficient scope"), nil
+			}
+			// Verify parent-path integrity before rejecting.
+			existing, err := draftSv.Get(ctx, claims, draftID)
+			if err != nil {
+				return shared.Error(404, "draft not found"), nil
+			}
+			if existing.InboxID != inboxID {
+				return shared.Error(404, "draft not found"), nil
+			}
 			var req struct {
 				Reason string `json:"reason"`
 			}

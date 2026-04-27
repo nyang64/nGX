@@ -93,6 +93,9 @@ func TestKeywordSearch(t *testing.T) {
 				if rank <= 0 {
 					t.Fatalf("expected rank > 0, got %f", rank)
 				}
+				if str(m, "snippet") == "" {
+					t.Fatal("search result missing snippet field")
+				}
 				return
 			}
 		}

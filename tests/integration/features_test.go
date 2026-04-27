@@ -653,6 +653,79 @@ func TestSendValidation(t *testing.T) {
 	})
 }
 
+// ── nGX-6z6: Invalid pagination cursor returns 400 ───────────────────────────
+
+// TestInvalidCursorReturns400 verifies that passing a syntactically invalid
+// base64 cursor string to list endpoints returns 400 (not 500).
+func TestInvalidCursorReturns400(t *testing.T) {
+	admin := newClient(t)
+	const badCursor = "notvalidbase64!!!"
+
+	// Create an inbox so the list endpoints have something to operate on.
+	code, body, err := admin.post("/v1/inboxes", map[string]any{"address": uniqueName("invalid-cursor")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	t.Cleanup(func() { admin.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+	// Send a message to create a thread (needed for the messages endpoint).
+	code, body, err = admin.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
+		"to":        []map[string]any{{"email": "cursor-test@example.com"}},
+		"subject":   "Invalid cursor test",
+		"body_text": "Testing invalid cursor handling",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+
+	// Retrieve the thread ID from the threads list.
+	code, body, err = admin.get(fmt.Sprintf("/v1/inboxes/%s/threads", inboxID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 200, body)
+	threads := listOf(body, "threads")
+	if len(threads) == 0 {
+		t.Fatal("expected at least one thread after sending a message")
+	}
+	threadID := str(asMap(threads[0]), "id")
+
+	t.Run("inboxes_list", func(t *testing.T) {
+		code, body, err := admin.get("/v1/inboxes?cursor=" + badCursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 400, body)
+	})
+
+	t.Run("threads_list", func(t *testing.T) {
+		code, body, err := admin.get(fmt.Sprintf("/v1/inboxes/%s/threads?cursor=%s", inboxID, badCursor))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 400, body)
+	})
+
+	t.Run("messages_list", func(t *testing.T) {
+		code, body, err := admin.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages?cursor=%s", inboxID, threadID, badCursor))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 400, body)
+	})
+
+	t.Run("drafts_list", func(t *testing.T) {
+		code, body, err := admin.get(fmt.Sprintf("/v1/inboxes/%s/drafts?cursor=%s", inboxID, badCursor))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 400, body)
+	})
+}
+
 // helper: test that a string contains a substring (for validation error messages)
 func containsStr(t *testing.T, haystack, needle string) bool {
 	t.Helper()
@@ -743,6 +816,29 @@ func TestDuplicateConflicts(t *testing.T) {
 		}
 		if code != 400 && code != 409 {
 			t.Errorf("duplicate domain: expected 400 or 409, got %d: %v", code, body2)
+		}
+	})
+
+	t.Run("duplicate_label_name", func(t *testing.T) {
+		name := uniqueName("dup-label")
+		code, body, err := c.post("/v1/labels", map[string]any{"name": name, "color": "#aabbcc"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		id := mustStr(t, body, "id")
+		t.Cleanup(func() { c.delete("/v1/labels/" + id) }) //nolint
+
+		// Second label with identical name.
+		code, body2, err := c.post("/v1/labels", map[string]any{"name": name, "color": "#112233"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code == 500 {
+			t.Errorf("duplicate label name should not return 500 (raw DB error leaked): %v", body2)
+		}
+		if code != 400 && code != 409 {
+			t.Errorf("duplicate label name: expected 400 or 409, got %d: %v", code, body2)
 		}
 	})
 }
@@ -1071,6 +1167,963 @@ func TestSearchEdgeCases(t *testing.T) {
 		items := listOf(body, "items")
 		if len(items) != 0 {
 			t.Errorf("new inbox should have 0 search results, got %d", len(items))
+		}
+	})
+}
+
+// ── nGX-9jo: GET /inboxes?pod_id= filter ─────────────────────────────────────
+
+// TestInboxPodIDFilter verifies that an org-admin key can filter GET /inboxes
+// by pod_id and that inboxes from other pods are excluded from the results.
+func TestInboxPodIDFilter(t *testing.T) {
+	admin := newClient(t)
+
+	// Create two pods.
+	code, body, err := admin.post("/v1/pods", map[string]any{"name": "Pod Filter 1", "slug": uniqueName("pod")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	pod1ID := mustStr(t, body, "id")
+	t.Cleanup(func() { admin.delete("/v1/pods/" + pod1ID) }) //nolint
+
+	code, body, err = admin.post("/v1/pods", map[string]any{"name": "Pod Filter 2", "slug": uniqueName("pod")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	pod2ID := mustStr(t, body, "id")
+	t.Cleanup(func() { admin.delete("/v1/pods/" + pod2ID) }) //nolint
+
+	// Create an inbox in pod1.
+	code, body, err = admin.post("/v1/inboxes", map[string]any{
+		"Address": uniqueName("filter-p1"),
+		"PodID":   pod1ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inbox1ID := mustStr(t, body, "id")
+	t.Cleanup(func() { admin.delete("/v1/inboxes/" + inbox1ID) }) //nolint
+
+	// Create an inbox in pod2.
+	code, body, err = admin.post("/v1/inboxes", map[string]any{
+		"Address": uniqueName("filter-p2"),
+		"PodID":   pod2ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inbox2ID := mustStr(t, body, "id")
+	t.Cleanup(func() { admin.delete("/v1/inboxes/" + inbox2ID) }) //nolint
+
+	t.Run("filter_by_pod1_returns_only_pod1_inbox", func(t *testing.T) {
+		code, body, err := admin.get("/v1/inboxes?pod_id=" + pod1ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		inboxes := listOf(body, "inboxes")
+		foundPod1 := false
+		for _, inbox := range inboxes {
+			id := str(asMap(inbox), "id")
+			if id == inbox2ID {
+				t.Errorf("pod2 inbox %s should not appear in ?pod_id=%s results", inbox2ID, pod1ID)
+			}
+			if id == inbox1ID {
+				foundPod1 = true
+			}
+		}
+		if !foundPod1 {
+			t.Errorf("pod1 inbox %s not found in ?pod_id=%s results", inbox1ID, pod1ID)
+		}
+	})
+
+	t.Run("filter_by_pod2_returns_only_pod2_inbox", func(t *testing.T) {
+		code, body, err := admin.get("/v1/inboxes?pod_id=" + pod2ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		inboxes := listOf(body, "inboxes")
+		foundPod2 := false
+		for _, inbox := range inboxes {
+			id := str(asMap(inbox), "id")
+			if id == inbox1ID {
+				t.Errorf("pod1 inbox %s should not appear in ?pod_id=%s results", inbox1ID, pod2ID)
+			}
+			if id == inbox2ID {
+				foundPod2 = true
+			}
+		}
+		if !foundPod2 {
+			t.Errorf("pod2 inbox %s not found in ?pod_id=%s results", inbox2ID, pod2ID)
+		}
+	})
+
+	t.Run("invalid_pod_id_returns_400", func(t *testing.T) {
+		code, _, err := admin.get("/v1/inboxes?pod_id=not-a-uuid")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("invalid pod_id should return 400, got %d", code)
+		}
+	})
+}
+
+// ── nGX-oou: Inbox single GET is org-scoped ───────────────────────────────────
+
+// TestInboxSingleGetIsOrgScoped documents that GET /v1/inboxes/{id} is org-scoped,
+// not pod-scoped. A pod-2 key can directly GET a pod-1 inbox by ID.
+// This is intentional: the route is used for cross-pod inbox lookups (e.g. routing).
+// Pod isolation is enforced only on the LIST endpoint (WHERE pod_id = $X in SQL).
+// If pod-level isolation on GET is desired in the future, add a pod_id check to
+// InboxStore.GetByID and update this test accordingly.
+func TestInboxSingleGetIsOrgScoped(t *testing.T) {
+	admin := newClient(t)
+
+	// Create two pods.
+	code, body, err := admin.post("/v1/pods", map[string]any{"name": "Pod X", "slug": uniqueName("pod")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	pod1ID := mustStr(t, body, "id")
+	t.Cleanup(func() { admin.delete("/v1/pods/" + pod1ID) }) //nolint
+
+	code, body, err = admin.post("/v1/pods", map[string]any{"name": "Pod X", "slug": uniqueName("pod")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	pod2ID := mustStr(t, body, "id")
+	t.Cleanup(func() { admin.delete("/v1/pods/" + pod2ID) }) //nolint
+
+	// Create an inbox in pod1.
+	code, body, err = admin.post("/v1/inboxes", map[string]any{
+		"Address": uniqueName("sgt"),
+		"PodID":   pod1ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	pod1InboxID := mustStr(t, body, "id")
+	t.Cleanup(func() { admin.delete("/v1/inboxes/" + pod1InboxID) }) //nolint
+
+	// Create a pod2-scoped key with inbox:read.
+	code, body, err = admin.post("/v1/keys", map[string]any{
+		"name":   uniqueName("pod2-key"),
+		"scopes": []string{"inbox:read"},
+		"pod_id": pod2ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	pod2KeyID := mustStr(t, body, "id")
+	pod2Key := str(body, "key")
+	t.Cleanup(func() { admin.delete("/v1/keys/" + pod2KeyID) }) //nolint
+
+	c2 := &client{baseURL: admin.baseURL, apiKey: pod2Key, httpClient: admin.httpClient}
+
+	t.Run("pod2_key_can_get_pod1_inbox_directly", func(t *testing.T) {
+		// org-scoped; pod check is intentionally absent on single GET
+		code, body, err := c2.get("/v1/inboxes/" + pod1InboxID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 200 {
+			t.Errorf("pod-2 key should be able to GET a pod-1 inbox directly (org-scoped): got %d %v", code, body)
+		}
+	})
+
+	t.Run("pod2_key_cannot_list_pod1_inbox", func(t *testing.T) {
+		// pod isolation on list is enforced (WHERE pod_id = $X in SQL)
+		code, body, err := c2.get("/v1/inboxes")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		for _, inbox := range listOf(body, "inboxes") {
+			if str(asMap(inbox), "id") == pod1InboxID {
+				t.Errorf("pod-2-scoped key should not see pod-1 inbox in list, but found it: %v", inbox)
+			}
+		}
+	})
+}
+
+// ── nGX-mde: Parent-path integrity ───────────────────────────────────────────
+
+// TestParentPathIntegrity verifies that nested routes check parent-path
+// ownership — e.g. a thread belonging to inbox1 cannot be accessed via
+// inbox2's path, and a message belonging to thread1 cannot be accessed via
+// thread2's path.
+func TestParentPathIntegrity(t *testing.T) {
+	c := newClient(t)
+
+	// Create two inboxes.
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("ppi-inbox1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inbox1ID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inbox1ID) }) //nolint
+
+	code, body, err = c.post("/v1/inboxes", map[string]any{"address": uniqueName("ppi-inbox2")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inbox2ID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inbox2ID) }) //nolint
+
+	// Send a message to inbox1 — creates thread1 containing message1.
+	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inbox1ID), map[string]any{
+		"to":        []map[string]any{{"email": "ppi-test@example.com"}},
+		"subject":   "Parent path integrity test " + uniqueName("t"),
+		"body_text": "Testing parent-path integrity",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	thread1ID := mustStr(t, body, "thread_id")
+	message1ID := mustStr(t, body, "id")
+
+	// Create a draft in inbox1.
+	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/drafts", inbox1ID), map[string]any{
+		"to":        []map[string]any{{"email": "ppi-draft@example.com"}},
+		"subject":   "Parent path integrity draft",
+		"body_text": "Draft for ppi test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	draft1ID := mustStr(t, body, "id")
+
+	t.Run("thread_wrong_inbox_returns_404", func(t *testing.T) {
+		// thread1 belongs to inbox1; accessing it via inbox2 should be 404.
+		code, body, err := c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s", inbox2ID, thread1ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 404 {
+			t.Errorf("expected 404 for thread1 accessed via inbox2, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("message_wrong_thread_returns_404", func(t *testing.T) {
+		// Send a second message to inbox1 — creates thread2.
+		code, body, err := c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inbox1ID), map[string]any{
+			"to":        []map[string]any{{"email": "ppi-test2@example.com"}},
+			"subject":   "Parent path integrity test 2 " + uniqueName("t"),
+			"body_text": "Thread 2 for ppi test",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		thread2ID := mustStr(t, body, "thread_id")
+
+		// message1 is in thread1; accessing it via thread2 should be 404.
+		code, body, err = c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s/messages/%s", inbox1ID, thread2ID, message1ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 404 {
+			t.Errorf("expected 404 for message1 accessed via thread2, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("draft_wrong_inbox_returns_404", func(t *testing.T) {
+		// draft1 belongs to inbox1; accessing it via inbox2 should be 404.
+		code, body, err := c.get(fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inbox2ID, draft1ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 404 {
+			t.Errorf("expected 404 for draft1 accessed via inbox2, got %d: %v", code, body)
+		}
+	})
+}
+
+// ── nGX-29n: Thread PATCH multi-field ────────────────────────────────────────
+
+// TestThreadPatchMultiField verifies that PATCH /threads/{id} applies all
+// provided fields (is_read, is_starred) in a single request, not just the first.
+func TestThreadPatchMultiField(t *testing.T) {
+	c := newClient(t)
+
+	// Create inbox and send a message to get a thread.
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("tpmf")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
+		"to":        []map[string]any{{"email": "success@simulator.amazonses.com"}},
+		"subject":   "Multi-field patch test",
+		"body_text": "body",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	threadID := mustStr(t, body, "thread_id")
+
+	t.Run("both_is_read_and_is_starred_applied", func(t *testing.T) {
+		// PATCH with both fields simultaneously.
+		code, body, err := c.patch(fmt.Sprintf("/v1/inboxes/%s/threads/%s", inboxID, threadID), map[string]any{
+			"is_read":    true,
+			"is_starred": true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+
+		// GET the thread and verify both fields were applied.
+		code, body, err = c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s", inboxID, threadID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		if isRead, _ := body["is_read"].(bool); !isRead {
+			t.Errorf("expected is_read=true after multi-field PATCH, got %v", body["is_read"])
+		}
+		if isStarred, _ := body["is_starred"].(bool); !isStarred {
+			t.Errorf("expected is_starred=true after multi-field PATCH, got %v", body["is_starred"])
+		}
+	})
+
+	t.Run("reset_both_fields", func(t *testing.T) {
+		code, body, err := c.patch(fmt.Sprintf("/v1/inboxes/%s/threads/%s", inboxID, threadID), map[string]any{
+			"is_read":    false,
+			"is_starred": false,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+
+		code, body, err = c.get(fmt.Sprintf("/v1/inboxes/%s/threads/%s", inboxID, threadID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		if isRead, _ := body["is_read"].(bool); isRead {
+			t.Errorf("expected is_read=false after reset, got %v", body["is_read"])
+		}
+		if isStarred, _ := body["is_starred"].(bool); isStarred {
+			t.Errorf("expected is_starred=false after reset, got %v", body["is_starred"])
+		}
+	})
+}
+
+// ── nGX-8xw: GET /inboxes ?limit= pagination ─────────────────────────────────
+
+// TestInboxListPagination verifies that GET /inboxes respects the ?limit= param
+// and returns next_cursor when more results exist.
+func TestInboxListPagination(t *testing.T) {
+	c := newClient(t)
+
+	// Create 3 inboxes with known addresses.
+	var ids []string
+	for i := 0; i < 3; i++ {
+		code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("ilp")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		id := mustStr(t, body, "id")
+		ids = append(ids, id)
+		t.Cleanup(func() { c.delete("/v1/inboxes/" + id) }) //nolint
+	}
+
+	// First page: limit=2.
+	code, body, err := c.get("/v1/inboxes?limit=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 200, body)
+	page1 := listOf(body, "inboxes")
+	if len(page1) != 2 {
+		t.Fatalf("expected 2 inboxes with limit=2, got %d", len(page1))
+	}
+	cursor := str(body, "next_cursor")
+	if cursor == "" {
+		t.Fatal("expected next_cursor with limit=2 when more inboxes exist")
+	}
+
+	// Second page: follow cursor.
+	code, body, err = c.get("/v1/inboxes?cursor=" + cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 200, body)
+	page2 := listOf(body, "inboxes")
+	if len(page2) == 0 {
+		t.Fatal("expected at least 1 inbox on second page")
+	}
+
+	// No duplicate IDs across pages.
+	seen := map[string]bool{}
+	for _, item := range page1 {
+		seen[str(asMap(item), "id")] = true
+	}
+	for _, item := range page2 {
+		id := str(asMap(item), "id")
+		if seen[id] {
+			t.Errorf("duplicate inbox id %s across pages", id)
+		}
+	}
+}
+
+// ── nGX-r7e: Draft list pagination ───────────────────────────────────────────
+
+// TestDraftListPagination verifies limit/cursor pagination on GET /drafts.
+func TestDraftListPagination(t *testing.T) {
+	c := newClient(t)
+
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("dlp")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+	// Create 3 drafts.
+	for i := 0; i < 3; i++ {
+		code, body, err := c.post(fmt.Sprintf("/v1/inboxes/%s/drafts", inboxID), map[string]any{
+			"to":        []map[string]any{{"email": "x@example.com"}},
+			"subject":   uniqueName("draft-subject"),
+			"body_text": "pagination test",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+	}
+
+	// First page: limit=2.
+	code, body, err = c.get(fmt.Sprintf("/v1/inboxes/%s/drafts?limit=2", inboxID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 200, body)
+	page1 := listOf(body, "drafts")
+	if len(page1) != 2 {
+		t.Fatalf("expected 2 drafts with limit=2, got %d", len(page1))
+	}
+	cursor := str(body, "next_cursor")
+	if cursor == "" {
+		t.Fatal("expected next_cursor when more drafts exist")
+	}
+
+	// Second page.
+	code, body, err = c.get(fmt.Sprintf("/v1/inboxes/%s/drafts?cursor=%s", inboxID, cursor))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 200, body)
+	page2 := listOf(body, "drafts")
+	if len(page2) == 0 {
+		t.Fatal("expected at least 1 draft on second page")
+	}
+
+	// No duplicates.
+	seen := map[string]bool{}
+	for _, item := range page1 {
+		seen[str(asMap(item), "id")] = true
+	}
+	for _, item := range page2 {
+		id := str(asMap(item), "id")
+		if seen[id] {
+			t.Errorf("duplicate draft id %s across pages", id)
+		}
+	}
+}
+
+// ── nGX-43o: Pod slug validation ─────────────────────────────────────────────
+
+// TestPodSlugValidation verifies that POST /pods rejects slugs that don't
+// match ^[a-z0-9-]+$.
+func TestPodSlugValidation(t *testing.T) {
+	c := newClient(t)
+
+	t.Run("invalid_slug_uppercase_returns_400", func(t *testing.T) {
+		code, body, err := c.post("/v1/pods", map[string]any{
+			"name": "Test Pod",
+			"slug": "UPPERCASE",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("expected 400 for uppercase slug, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("invalid_slug_special_chars_returns_400", func(t *testing.T) {
+		code, body, err := c.post("/v1/pods", map[string]any{
+			"name": "Test Pod",
+			"slug": "my pod!",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("expected 400 for slug with spaces/special chars, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("valid_slug_accepted", func(t *testing.T) {
+		slug := uniqueName("valid-slug")
+		code, body, err := c.post("/v1/pods", map[string]any{
+			"name": "Valid Slug Pod",
+			"slug": slug,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		id := mustStr(t, body, "id")
+		t.Cleanup(func() { c.delete("/v1/pods/" + id) }) //nolint
+	})
+}
+
+// ── nGX-dqd: Draft recipient validation ──────────────────────────────────────
+
+// TestDraftRecipientValidation verifies that draft create/update enforce
+// recipient constraints: at least one To address, valid email format.
+func TestDraftRecipientValidation(t *testing.T) {
+	c := newClient(t)
+
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("drv")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+	t.Run("missing_to_returns_400", func(t *testing.T) {
+		code, body, err := c.post(fmt.Sprintf("/v1/inboxes/%s/drafts", inboxID), map[string]any{
+			"subject":   "No recipient",
+			"body_text": "body",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("expected 400 for draft with no recipients, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("invalid_email_in_to_returns_400", func(t *testing.T) {
+		code, body, err := c.post(fmt.Sprintf("/v1/inboxes/%s/drafts", inboxID), map[string]any{
+			"to":        []map[string]any{{"email": "not-an-email"}},
+			"subject":   "Bad email",
+			"body_text": "body",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("expected 400 for invalid email in to, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("valid_recipient_accepted", func(t *testing.T) {
+		code, body, err := c.post(fmt.Sprintf("/v1/inboxes/%s/drafts", inboxID), map[string]any{
+			"to":        []map[string]any{{"email": "valid@example.com"}},
+			"subject":   "Valid draft",
+			"body_text": "body",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		draftID := mustStr(t, body, "id")
+		t.Cleanup(func() {
+			c.delete(fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inboxID, draftID))
+		}) //nolint
+
+		// Update with invalid cc email should fail.
+		t.Run("invalid_cc_on_update_returns_400", func(t *testing.T) {
+			code, body, err := c.patch(fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inboxID, draftID), map[string]any{
+				"cc": []map[string]any{{"email": "bad-email"}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if code != 400 {
+				t.Errorf("expected 400 for invalid cc email on update, got %d: %v", code, body)
+			}
+		})
+	})
+}
+
+// ── nGX-5jg: Draft scheduled_at round-trip ───────────────────────────────────
+
+// TestDraftScheduledAtRoundTrip verifies that scheduled_at is stored and returned
+// correctly in GET /drafts/{id} before the scheduler runs.
+func TestDraftScheduledAtRoundTrip(t *testing.T) {
+	c := newClient(t)
+
+	_, inboxesBody, err := c.get("/v1/inboxes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inboxes := listOf(inboxesBody, "inboxes")
+	if len(inboxes) == 0 {
+		t.Skip("no inboxes available")
+	}
+	inboxID := str(asMap(inboxes[0]), "id")
+	inboxEmail := str(asMap(inboxes[0]), "email")
+
+	// 5 minutes in the future so the scheduler won't process it during the test.
+	futureTime := time.Now().UTC().Add(5 * time.Minute).Truncate(time.Second)
+	scheduledAt := futureTime.Format(time.RFC3339)
+
+	code, body, err := c.post(fmt.Sprintf("/v1/inboxes/%s/drafts", inboxID), map[string]any{
+		"to":           []map[string]any{{"email": inboxEmail}},
+		"subject":      uniqueName("sched-draft"),
+		"body_text":    "scheduled draft test",
+		"scheduled_at": scheduledAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	draftID := mustStr(t, body, "id")
+	t.Cleanup(func() {
+		c.delete(fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inboxID, draftID))
+	})
+
+	t.Run("scheduled_at_in_response", func(t *testing.T) {
+		if str(body, "scheduled_at") == "" {
+			t.Fatal("scheduled_at missing from POST response")
+		}
+	})
+
+	t.Run("scheduled_at_round_trips_via_get", func(t *testing.T) {
+		code, got, err := c.get(fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inboxID, draftID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, got)
+		gotAt := str(got, "scheduled_at")
+		if gotAt == "" {
+			t.Fatal("scheduled_at missing from GET response")
+		}
+		// Parse both as RFC3339 and compare to second precision.
+		gotParsed, err := time.Parse(time.RFC3339, gotAt)
+		if err != nil {
+			// try RFC3339Nano
+			gotParsed, err = time.Parse(time.RFC3339Nano, gotAt)
+			if err != nil {
+				t.Fatalf("scheduled_at not RFC3339: %q", gotAt)
+			}
+		}
+		if !gotParsed.Truncate(time.Second).Equal(futureTime) {
+			t.Errorf("scheduled_at mismatch: got %v, want %v", gotParsed.Truncate(time.Second), futureTime)
+		}
+	})
+
+	t.Run("review_status_is_pending_before_scheduler", func(t *testing.T) {
+		code, got, err := c.get(fmt.Sprintf("/v1/inboxes/%s/drafts/%s", inboxID, draftID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, got)
+		if s := str(got, "review_status"); s != "pending" {
+			t.Errorf("expected review_status=pending, got %q", s)
+		}
+	})
+}
+
+// ── nGX-ad9: Pod PATCH settings field ────────────────────────────────────────
+
+// TestPodPatchSettings verifies that settings can be updated via PATCH /pods/{id}.
+func TestPodPatchSettings(t *testing.T) {
+	c := newClient(t)
+
+	code, body, err := c.post("/v1/pods", map[string]any{
+		"name": uniqueName("pod-settings"),
+		"slug": uniqueName("pod-settings"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	podID := mustStr(t, body, "id")
+	t.Cleanup(func() {
+		c.delete("/v1/pods/" + podID)
+	})
+
+	t.Run("patch_settings_field", func(t *testing.T) {
+		code, got, err := c.patch("/v1/pods/"+podID, map[string]any{
+			"name":     str(body, "name"),
+			"settings": map[string]any{"theme": "dark", "notifications": true},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, got)
+	})
+
+	t.Run("settings_persisted_in_get", func(t *testing.T) {
+		code, got, err := c.get("/v1/pods/" + podID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, got)
+		settings, ok := got["settings"].(map[string]any)
+		if !ok {
+			t.Fatalf("settings field not a map: %T %v", got["settings"], got["settings"])
+		}
+		if settings["theme"] != "dark" {
+			t.Errorf("expected settings.theme=dark, got %v", settings["theme"])
+		}
+	})
+
+	t.Run("patch_without_settings_preserves_existing", func(t *testing.T) {
+		// PATCH with only name — settings should remain unchanged.
+		code, _, err := c.patch("/v1/pods/"+podID, map[string]any{
+			"name": str(body, "name"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, map[string]any{})
+
+		code, got, err := c.get("/v1/pods/" + podID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, got)
+		settings, ok := got["settings"].(map[string]any)
+		if !ok {
+			t.Fatalf("settings field not a map after name-only patch: %T", got["settings"])
+		}
+		if settings["theme"] != "dark" {
+			t.Errorf("settings should be preserved after name-only patch, got %v", settings)
+		}
+	})
+}
+
+// ── nGX-egf: Label hex color validation ──────────────────────────────────────
+
+// TestLabelColorValidation verifies that invalid color strings are rejected.
+func TestLabelColorValidation(t *testing.T) {
+	c := newClient(t)
+
+	t.Run("non_hex_string_returns_400", func(t *testing.T) {
+		code, body, err := c.post("/v1/labels", map[string]any{
+			"name":  uniqueName("label-color"),
+			"color": "not-a-hex",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("expected 400 for non-hex color, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("invalid_hex_chars_returns_400", func(t *testing.T) {
+		code, body, err := c.post("/v1/labels", map[string]any{
+			"name":  uniqueName("label-color"),
+			"color": "#gg0000",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("expected 400 for invalid hex chars, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("valid_hex_color_returns_201", func(t *testing.T) {
+		name := uniqueName("label-color-valid")
+		code, body, err := c.post("/v1/labels", map[string]any{
+			"name":  name,
+			"color": "#ff5733",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		labelID := mustStr(t, body, "id")
+		t.Cleanup(func() {
+			c.delete("/v1/labels/" + labelID)
+		})
+		if str(body, "color") != "#ff5733" {
+			t.Errorf("expected color=#ff5733, got %q", str(body, "color"))
+		}
+	})
+
+	t.Run("update_with_invalid_color_returns_400", func(t *testing.T) {
+		// Create valid label first.
+		name := uniqueName("label-update-color")
+		code, body, err := c.post("/v1/labels", map[string]any{
+			"name":  name,
+			"color": "#aabbcc",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		labelID := mustStr(t, body, "id")
+		t.Cleanup(func() {
+			c.delete("/v1/labels/" + labelID)
+		})
+
+		code, body, err = c.patch("/v1/labels/"+labelID, map[string]any{
+			"color": "badcolor",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("expected 400 for invalid color on update, got %d: %v", code, body)
+		}
+	})
+}
+
+// ── nGX-hwl: Thread PATCH empty body ─────────────────────────────────────────
+
+// TestThreadPatchEmptyBody documents and asserts the behavior of PATCH /threads/{id}
+// with no recognized fields — the handler returns 400 "at least one field required".
+func TestThreadPatchEmptyBody(t *testing.T) {
+	c := newClient(t)
+
+	// Create an inbox and send a message to get a thread.
+	code, body, err := c.post("/v1/inboxes", map[string]any{"address": uniqueName("hwl")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) })
+
+	code, body, err = c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
+		"to":        []map[string]any{{"email": "hwl-test@example.com"}},
+		"subject":   uniqueName("hwl-thread"),
+		"body_text": "thread patch empty body test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	threadID := mustStr(t, body, "thread_id")
+
+	t.Run("empty_body_returns_400", func(t *testing.T) {
+		code, body, err := c.patch(fmt.Sprintf("/v1/inboxes/%s/threads/%s", inboxID, threadID), map[string]any{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("expected 400 for empty PATCH body, got %d: %v", code, body)
+		}
+	})
+
+	t.Run("unknown_field_only_returns_400", func(t *testing.T) {
+		code, body, err := c.patch(fmt.Sprintf("/v1/inboxes/%s/threads/%s", inboxID, threadID), map[string]any{
+			"unknown_field": "some_value",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code != 400 {
+			t.Errorf("expected 400 for unrecognized-only PATCH body, got %d: %v", code, body)
+		}
+	})
+}
+
+// ── nGX-lc0: GET /keys pagination ────────────────────────────────────────────
+
+// TestKeysListPagination verifies that GET /keys supports cursor-based pagination.
+func TestKeysListPagination(t *testing.T) {
+	c := newClient(t)
+
+	// Create enough keys to exceed limit=2 (need ≥3).
+	const total = 3
+	var keyIDs []string
+	for i := 0; i < total; i++ {
+		code, body, err := c.post("/v1/keys", map[string]any{
+			"name":   fmt.Sprintf("pagination-test-key-%d-%d", time.Now().UnixNano(), i),
+			"scopes": []string{"inbox:read"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, body)
+		keyIDs = append(keyIDs, mustStr(t, body, "id"))
+	}
+	t.Cleanup(func() {
+		for _, id := range keyIDs {
+			c.delete("/v1/keys/" + id)
+		}
+	})
+
+	t.Run("limit_returns_fewer_items_and_cursor", func(t *testing.T) {
+		code, body, err := c.get("/v1/keys?limit=2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		keys := listOf(body, "keys")
+		if len(keys) != 2 {
+			t.Fatalf("expected 2 keys, got %d", len(keys))
+		}
+		if str(body, "next_cursor") == "" {
+			t.Fatal("expected next_cursor to be set when more keys exist")
+		}
+	})
+
+	t.Run("cursor_returns_next_page_no_duplicates", func(t *testing.T) {
+		code, body, err := c.get("/v1/keys?limit=2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		page1Keys := listOf(body, "keys")
+		cursor := str(body, "next_cursor")
+		if cursor == "" {
+			t.Skip("no cursor returned; not enough keys to paginate")
+		}
+
+		seen := map[string]bool{}
+		for _, k := range page1Keys {
+			seen[str(asMap(k), "id")] = true
+		}
+
+		code, body, err = c.get("/v1/keys?limit=2&cursor=" + cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 200, body)
+		page2Keys := listOf(body, "keys")
+		if len(page2Keys) == 0 {
+			t.Fatal("expected at least one key on second page")
+		}
+		for _, k := range page2Keys {
+			id := str(asMap(k), "id")
+			if seen[id] {
+				t.Errorf("duplicate key %s found across pages", id)
+			}
 		}
 	})
 }

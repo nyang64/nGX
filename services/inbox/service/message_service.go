@@ -81,6 +81,7 @@ type MessageService struct {
 	outboundProducer events.OutboundPublisher
 	eventPublisher   events.EventPublisher
 	attachmentsS3    *s3pkg.Client
+	emailsS3         *s3pkg.Client
 }
 
 // NewMessageService creates a new MessageService.
@@ -92,6 +93,7 @@ func NewMessageService(
 	outboundProducer events.OutboundPublisher,
 	eventPublisher events.EventPublisher,
 	attachmentsS3 *s3pkg.Client,
+	emailsS3 *s3pkg.Client,
 ) *MessageService {
 	return &MessageService{
 		pool:             pool,
@@ -101,6 +103,7 @@ func NewMessageService(
 		outboundProducer: outboundProducer,
 		eventPublisher:   eventPublisher,
 		attachmentsS3:    attachmentsS3,
+		emailsS3:         emailsS3,
 	}
 }
 
@@ -139,6 +142,20 @@ func (s *MessageService) Get(ctx context.Context, claims *auth.Claims, messageID
 	})
 	if err != nil {
 		return nil, fmt.Errorf("get message: %w", err)
+	}
+	return msg, nil
+}
+
+// UpdateMessage applies a patch to a message's mutable fields.
+func (s *MessageService) UpdateMessage(ctx context.Context, claims *auth.Claims, messageID uuid.UUID, patch store.MessagePatch) (*models.Message, error) {
+	var msg *models.Message
+	err := dbpkg.WithOrgTx(ctx, s.pool, claims.OrgID, func(tx pgx.Tx) error {
+		var err error
+		msg, err = s.messageStore.UpdateMessage(ctx, tx, claims.OrgID, messageID, patch)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("update message: %w", err)
 	}
 	return msg, nil
 }
@@ -377,6 +394,138 @@ func (s *MessageService) Send(ctx context.Context, claims *auth.Claims, inboxID 
 	})
 
 	return msg, nil
+}
+
+// GetRaw returns the raw RFC 5322 bytes for an inbound message from S3.
+// Outbound messages do not have a raw key and return an error.
+func (s *MessageService) GetRaw(ctx context.Context, claims *auth.Claims, messageID uuid.UUID) ([]byte, error) {
+	msg, err := s.Get(ctx, claims, messageID)
+	if err != nil {
+		return nil, err
+	}
+	if msg.RawS3Key == "" {
+		return nil, fmt.Errorf("raw message not available")
+	}
+	if s.emailsS3 == nil {
+		return nil, fmt.Errorf("emails S3 client not configured")
+	}
+	data, err := s.emailsS3.Download(ctx, msg.RawS3Key)
+	if err != nil {
+		return nil, fmt.Errorf("download raw message: %w", err)
+	}
+	return data, nil
+}
+
+// GetAttachmentContent returns the attachment record and its binary content.
+func (s *MessageService) GetAttachmentContent(ctx context.Context, claims *auth.Claims, messageID, attachmentID uuid.UUID) (*models.Attachment, []byte, error) {
+	var att *models.Attachment
+	if err := dbpkg.WithOrgTx(ctx, s.pool, claims.OrgID, func(tx pgx.Tx) error {
+		var err error
+		att, err = s.messageStore.GetAttachmentByID(ctx, tx, claims.OrgID, messageID, attachmentID)
+		return err
+	}); err != nil {
+		return nil, nil, fmt.Errorf("get attachment: %w", err)
+	}
+	if s.attachmentsS3 == nil {
+		return nil, nil, fmt.Errorf("attachments S3 client not configured")
+	}
+	data, err := s.attachmentsS3.Download(ctx, att.S3Key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("download attachment: %w", err)
+	}
+	return att, data, nil
+}
+
+// ReplyAllRequest is the input for a reply-all operation.
+type ReplyAllRequest struct {
+	BodyText    string             `json:"body_text"`
+	BodyHTML    string             `json:"body_html"`
+	Attachments []AttachmentRequest `json:"attachments,omitempty"`
+}
+
+// ForwardRequest is the input for a forward operation.
+type ForwardRequest struct {
+	To          []models.EmailAddress `json:"to"`
+	CC          []models.EmailAddress `json:"cc"`
+	BCC         []models.EmailAddress `json:"bcc"`
+	BodyText    string                `json:"body_text"`
+	BodyHTML    string                `json:"body_html"`
+	Attachments []AttachmentRequest   `json:"attachments,omitempty"`
+}
+
+// ReplyAll sends a reply-all to the given message. Recipients are derived from
+// the original message's From/To/Cc fields, excluding the sending inbox address.
+func (s *MessageService) ReplyAll(ctx context.Context, claims *auth.Claims, inboxID, messageID uuid.UUID, req ReplyAllRequest) (*models.Message, error) {
+	// Load the original message to compute recipients and threading headers.
+	orig, err := s.Get(ctx, claims, messageID)
+	if err != nil {
+		return nil, fmt.Errorf("get original message: %w", err)
+	}
+
+	// Load the inbox to know our own address so we can exclude it.
+	var inboxEmail string
+	if err := dbpkg.WithOrgTx(ctx, s.pool, claims.OrgID, func(tx pgx.Tx) error {
+		inbox, err := s.inboxStore.GetByID(ctx, tx, claims.OrgID, inboxID)
+		if err != nil {
+			return err
+		}
+		inboxEmail = strings.ToLower(inbox.Email)
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("get inbox: %w", err)
+	}
+
+	// Reply-all recipients = original From + To + Cc, excluding our inbox.
+	seen := map[string]bool{inboxEmail: true}
+	var to []models.EmailAddress
+	for _, addr := range append([]models.EmailAddress{orig.From}, append(orig.To, orig.Cc...)...) {
+		key := strings.ToLower(addr.Email)
+		if addr.Email != "" && !seen[key] {
+			seen[key] = true
+			to = append(to, addr)
+		}
+	}
+	if len(to) == 0 {
+		return nil, fmt.Errorf("no recipients after excluding own inbox address")
+	}
+
+	return s.Send(ctx, claims, inboxID, SendMessageRequest{
+		To:          to,
+		Subject:     orig.Subject,
+		BodyText:    req.BodyText,
+		BodyHTML:    req.BodyHTML,
+		ReplyToID:   &messageID,
+		Attachments: req.Attachments,
+	})
+}
+
+// Forward sends the given message to new recipients in a new thread.
+func (s *MessageService) Forward(ctx context.Context, claims *auth.Claims, inboxID, messageID uuid.UUID, req ForwardRequest) (*models.Message, error) {
+	if len(req.To) == 0 {
+		return nil, fmt.Errorf("to is required")
+	}
+
+	// Load the original message to get the subject.
+	orig, err := s.Get(ctx, claims, messageID)
+	if err != nil {
+		return nil, fmt.Errorf("get original message: %w", err)
+	}
+
+	subject := orig.Subject
+	if !strings.HasPrefix(strings.ToLower(subject), "fwd:") {
+		subject = "Fwd: " + subject
+	}
+
+	return s.Send(ctx, claims, inboxID, SendMessageRequest{
+		To:          req.To,
+		CC:          req.CC,
+		BCC:         req.BCC,
+		Subject:     subject,
+		BodyText:    req.BodyText,
+		BodyHTML:    req.BodyHTML,
+		Attachments: req.Attachments,
+		// No ReplyToID — forward always creates a new thread.
+	})
 }
 
 // snippetFrom returns a short preview from the body text.

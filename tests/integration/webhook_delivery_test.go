@@ -386,6 +386,54 @@ func startReceiver(t *testing.T, secret string, ch chan<- webhookPayload, reject
 	return ln.Addr().String(), func() { srv.Close() }
 }
 
+// TestWebhookAuthHeader verifies that auth_header (name+value) can be stored on
+// a webhook and that:
+//   - GET /v1/webhooks/{id} exposes auth_header_name in the response
+//   - auth_header_value is NOT present in the response (write-only)
+func TestWebhookAuthHeader(t *testing.T) {
+	c := newClient(t)
+
+	// Create a webhook with an auth_header.
+	code, body, err := c.post("/v1/webhooks", map[string]any{
+		"url":    "https://httpbin.org/post",
+		"events": []string{"message.sent"},
+		"auth_header": map[string]string{
+			"name":  "X-Custom-Auth",
+			"value": "secret-token-123",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	webhookID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/webhooks/" + webhookID) }) //nolint
+
+	// GET the webhook and assert auth_header_name is present.
+	code, body, err = c.get("/v1/webhooks/" + webhookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 200, body)
+
+	authHeaderName, hasName := body["auth_header_name"]
+	if !hasName {
+		t.Fatal("GET /v1/webhooks/{id}: expected auth_header_name in response, but it was absent")
+	}
+	if authHeaderName != "X-Custom-Auth" {
+		t.Fatalf("auth_header_name: got %q, want %q", authHeaderName, "X-Custom-Auth")
+	}
+
+	// Assert auth_header_value is NOT present (write-only).
+	if _, hasValue := body["auth_header_value"]; hasValue {
+		t.Fatal("GET /v1/webhooks/{id}: auth_header_value must not be exposed in the response (write-only)")
+	}
+	if _, hasValue := body["auth_header_value_enc"]; hasValue {
+		t.Fatal("GET /v1/webhooks/{id}: auth_header_value_enc must not be exposed in the response")
+	}
+	t.Logf("auth_header_name=%q correctly returned; auth_header_value correctly absent", authHeaderName)
+}
+
 // verifyWebhookSignature checks HMAC-SHA256: expected format is
 // "sha256=<hex>" matching HMAC-SHA256(secret, body).
 func verifyWebhookSignature(secret string, body []byte, sigHeader string) bool {
@@ -398,4 +446,107 @@ func verifyWebhookSignature(secret string, body []byte, sigHeader string) bool {
 	mac.Write(body)
 	expected := hex.EncodeToString(mac.Sum(nil))
 	return hmac.Equal([]byte(gotHex), []byte(expected))
+}
+
+// ── nGX-5ca: Webhook delivery pagination ─────────────────────────────────────
+
+// TestWebhookDeliveryPagination verifies that GET /webhooks/{id}/deliveries
+// supports cursor pagination via ?limit= and next_cursor.
+func TestWebhookDeliveryPagination(t *testing.T) {
+	c := newClient(t)
+
+	// Register a webhook pointing to httpbin (always returns 200).
+	code, body, err := c.post("/v1/webhooks", map[string]any{
+		"url":       "https://httpbin.org/post",
+		"events":    []string{"message.sent"},
+		"is_active": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	webhookID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/webhooks/" + webhookID) }) //nolint
+
+	// Create inbox.
+	code, body, err = c.post("/v1/inboxes", map[string]any{"address": uniqueName("wdp")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 201, body)
+	inboxID := mustStr(t, body, "id")
+	t.Cleanup(func() { c.delete("/v1/inboxes/" + inboxID) }) //nolint
+
+	// Send 3 messages to generate 3 delivery records.
+	for i := 0; i < 3; i++ {
+		code, _, err = c.post(fmt.Sprintf("/v1/inboxes/%s/messages/send", inboxID), map[string]any{
+			"to":        []map[string]any{{"email": "success@simulator.amazonses.com"}},
+			"subject":   fmt.Sprintf("Pagination delivery test %d", i+1),
+			"body_text": "body",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, code, 201, nil)
+	}
+
+	// Poll until we have at least 3 delivery records in a terminal state.
+	ok := pollUntil(t, 60*time.Second, 3*time.Second, func() bool {
+		_, body, err := c.get("/v1/webhooks/" + webhookID + "/deliveries")
+		if err != nil {
+			return false
+		}
+		deliveries := listOf(body, "deliveries")
+		if len(deliveries) < 3 {
+			return false
+		}
+		for _, d := range deliveries {
+			s := str(asMap(d), "status")
+			if s == "pending" || s == "retrying" {
+				return false
+			}
+		}
+		return true
+	})
+	if !ok {
+		t.Fatal("fewer than 3 terminal delivery records within 60s")
+	}
+
+	// Page 1: limit=2.
+	code, body, err = c.get(fmt.Sprintf("/v1/webhooks/%s/deliveries?limit=2", webhookID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 200, body)
+	page1 := listOf(body, "deliveries")
+	if len(page1) != 2 {
+		t.Fatalf("expected 2 deliveries with limit=2, got %d", len(page1))
+	}
+	cursor := str(body, "next_cursor")
+	if cursor == "" {
+		t.Fatal("expected next_cursor with limit=2 when >=3 deliveries exist")
+	}
+
+	// Page 2: follow cursor.
+	code, body, err = c.get(fmt.Sprintf("/v1/webhooks/%s/deliveries?cursor=%s", webhookID, cursor))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCode(t, code, 200, body)
+	page2 := listOf(body, "deliveries")
+	if len(page2) == 0 {
+		t.Fatal("expected at least 1 delivery on second page")
+	}
+
+	// No duplicate delivery IDs across pages.
+	seen := map[string]bool{}
+	for _, d := range page1 {
+		seen[str(asMap(d), "id")] = true
+	}
+	for _, d := range page2 {
+		id := str(asMap(d), "id")
+		if seen[id] {
+			t.Errorf("duplicate delivery id %s across pages", id)
+		}
+	}
 }
