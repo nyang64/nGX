@@ -89,10 +89,10 @@ aws_cmd() {
 }
 
 resource_exists() {
-  # Returns 0 if the aws command returns output, 1 if empty/error
+  # Returns 0 if the aws command returns non-empty, non-"None" output.
   local out
   out=$(aws_cmd "$@" 2>/dev/null || true)
-  [[ -n "$out" ]]
+  [[ -n "$out" && "$out" != "None" ]]
 }
 
 wait_for_deletion() {
@@ -212,26 +212,8 @@ else
   log "Aurora cluster $CLUSTER_ID not found — skipping."
 fi
 
-## 1d. Delete automated/system cluster snapshots
-log "Deleting automated snapshots for cluster: $CLUSTER_ID"
-snapshot_ids=$(aws_cmd rds describe-db-cluster-snapshots \
-  --db-cluster-identifier "$CLUSTER_ID" \
-  --snapshot-type automated \
-  --query 'DBClusterSnapshots[*].DBClusterSnapshotIdentifier' \
-  --output text 2>/dev/null || true)
-
-if [[ -n "$snapshot_ids" && "$snapshot_ids" != "None" ]]; then
-  for snap_id in $snapshot_ids; do
-    log "  Deleting snapshot: $snap_id"
-    aws_cmd rds delete-db-cluster-snapshot \
-      --db-cluster-snapshot-identifier "$snap_id" \
-      || warn "Failed to delete snapshot $snap_id"
-  done
-else
-  log "  No automated snapshots found."
-fi
-
-## 1e. Also delete any manually triggered snapshots tagged to this cluster
+## 1d. Delete manual cluster snapshots
+log "Deleting manual snapshots for cluster: $CLUSTER_ID"
 manual_snapshot_ids=$(aws_cmd rds describe-db-cluster-snapshots \
   --db-cluster-identifier "$CLUSTER_ID" \
   --snapshot-type manual \
@@ -245,6 +227,27 @@ if [[ -n "$manual_snapshot_ids" && "$manual_snapshot_ids" != "None" ]]; then
       --db-cluster-snapshot-identifier "$snap_id" \
       || warn "Failed to delete snapshot $snap_id"
   done
+else
+  log "  No manual snapshots found."
+fi
+
+## 1e. Delete retained automated backups ("system snapshots" in console).
+# These use a different API from regular snapshots — describe-db-cluster-automated-backups.
+log "Deleting retained automated backups for cluster: $CLUSTER_ID"
+backup_resource_ids=$(aws_cmd rds describe-db-cluster-automated-backups \
+  --db-cluster-identifier "$CLUSTER_ID" \
+  --query 'DBClusterAutomatedBackups[*].DbClusterResourceId' \
+  --output text 2>/dev/null || true)
+
+if [[ -n "$backup_resource_ids" && "$backup_resource_ids" != "None" ]]; then
+  for resource_id in $backup_resource_ids; do
+    log "  Deleting retained automated backup: $resource_id"
+    aws_cmd rds delete-db-cluster-automated-backup \
+      --db-cluster-resource-id "$resource_id" \
+      || warn "Failed to delete automated backup $resource_id"
+  done
+else
+  log "  No retained automated backups found."
 fi
 
 log "STEP 1 complete."
