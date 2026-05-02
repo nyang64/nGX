@@ -359,6 +359,54 @@ done
 
 # 3b. Destroy everything remaining.
 log "Running terraform destroy -refresh=false..."
+
+# Source TF_VAR_* from .env so required variables (e.g. mail_domain) are set.
+# Save and restore the four script-controlled vars to prevent .env from overriding them.
+_SAVE_APP_NAME="$APP_NAME"
+_SAVE_ENVIRONMENT="$ENVIRONMENT"
+_SAVE_AWS_REGION="$AWS_REGION"
+_SAVE_AWS_PROFILE="$AWS_PROFILE"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -f "${REPO_ROOT}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source <(grep -v '^#' "${REPO_ROOT}/.env" | grep -v '^[[:space:]]*$' | sed 's/[[:space:]]*#.*$//')
+  set +a
+fi
+APP_NAME="$_SAVE_APP_NAME"
+ENVIRONMENT="$_SAVE_ENVIRONMENT"
+AWS_REGION="$_SAVE_AWS_REGION"
+AWS_PROFILE="$_SAVE_AWS_PROFILE"
+
+# 3c. Background ENI watcher: Lambda ENIs in the VPC are released asynchronously
+# by AWS after Lambda functions are deleted and can block VPC/subnet deletion for
+# 15-40 minutes. Run a background loop to force-delete them as they become available.
+VPC_ID=$(aws_cmd ec2 describe-vpcs \
+  --filters "Name=tag:Application,Values=${APP_NAME}" \
+  --query 'Vpcs[0].VpcId' --output text 2>/dev/null || true)
+ENI_WATCHER_PID=""
+if [[ -n "$VPC_ID" && "$VPC_ID" != "None" ]]; then
+  log "Starting Lambda ENI watcher for VPC ${VPC_ID} (runs in background)..."
+  (
+    while true; do
+      sleep 20
+      enis=$(aws ec2 describe-network-interfaces \
+        --profile "$AWS_PROFILE" --region "$AWS_REGION" \
+        --filters "Name=vpc-id,Values=${VPC_ID}" "Name=status,Values=available" \
+        --query 'NetworkInterfaces[?starts_with(Description,`AWS Lambda VPC ENI`)].NetworkInterfaceId' \
+        --output text 2>/dev/null || true)
+      for eni in $enis; do
+        [[ "$eni" == "None" || -z "$eni" ]] && continue
+        aws ec2 delete-network-interface \
+          --profile "$AWS_PROFILE" --region "$AWS_REGION" \
+          --network-interface-id "$eni" 2>/dev/null && \
+          echo "[eni-watcher] Deleted Lambda ENI: $eni" || true
+      done
+    done
+  ) &
+  ENI_WATCHER_PID=$!
+fi
+
 TF_VAR_aws_profile="$AWS_PROFILE" \
 TF_VAR_aws_region="$AWS_REGION" \
 TF_VAR_app_name="$APP_NAME" \
@@ -370,6 +418,8 @@ TF_VAR_environment="$ENVIRONMENT" \
     -var "aws_region=${AWS_REGION}" \
     -var "app_name=${APP_NAME}" \
     -var "environment=${ENVIRONMENT}"
+
+[[ -n "$ENI_WATCHER_PID" ]] && kill "$ENI_WATCHER_PID" 2>/dev/null || true
 
 log "STEP 3 complete."
 echo

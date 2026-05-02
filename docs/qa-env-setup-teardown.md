@@ -262,6 +262,78 @@ DB_SECRET_ARN=${DB_SECRET_ARN}
 
 ---
 
+## Issue 9 — `terraform destroy` fails with missing required variable `mail_domain`
+
+**Phase:** teardown (terraform destroy)
+**Severity:** High — destroy halts prompting for variable input
+**Status:** Fixed in `destroy-env.sh`
+
+### Symptom
+```
+Error: No value for required variable
+  on variables.tf line 61:
+  61: variable "mail_domain" {
+The root module input variable "mail_domain" is not set, and has no default value.
+```
+
+### Root cause
+`destroy-env.sh` called `terraform destroy` with only the four script-controlled
+vars (`aws_profile`, `aws_region`, `app_name`, `environment`). Required variables
+with no defaults (like `mail_domain`, `webhook_encryption_key`) were not set,
+causing terraform to prompt interactively.
+
+### Fix applied
+`destroy-env.sh` now sources `TF_VAR_*` entries from `.env` before calling
+`terraform destroy`, with a save/restore guard around the four script-controlled
+vars (same pattern as `setup-env.sh`) to prevent `ENVIRONMENT=production` override.
+
+---
+
+## Issue 10 — `terraform destroy` hangs on VPC deletion due to Lambda ENIs
+
+**Phase:** teardown (terraform destroy, VPC step)
+**Severity:** Medium — destroy eventually times out or takes 40+ minutes
+**Status:** Handled by `destroy-env.sh` (ENI cleanup added)
+
+### Symptom
+Terraform destroy completes everything except the VPC, subnets, and security
+groups, then hangs indefinitely with no error output. Remaining resources:
+- 2 private subnets
+- 1 security group (`ngx-prod-lambda`)
+- VPC itself
+
+### Root cause
+VPC-attached Lambda functions leave behind Elastic Network Interfaces (ENIs)
+tagged `AWS Lambda VPC ENI-<function-name>`. After the Lambda functions are
+deleted, AWS asynchronously reclaims these ENIs — but this can take 15–40 minutes.
+Terraform waits for the VPC to be deletable, which it cannot be until all ENIs
+are released.
+
+### Fix applied
+`destroy-env.sh` detects and force-deletes `available` Lambda ENIs in the VPC
+before running `terraform destroy`:
+
+```bash
+# Delete lingering Lambda VPC ENIs that block subnet/VPC deletion
+lambda_enis=$(aws ec2 describe-network-interfaces \
+  --filters "Name=vpc-id,Values=${VPC_ID}" \
+             "Name=status,Values=available" \
+  --query 'NetworkInterfaces[?starts_with(Description,`AWS Lambda VPC ENI`)].NetworkInterfaceId' \
+  --output text)
+for eni in $lambda_enis; do
+  aws ec2 delete-network-interface --network-interface-id "$eni"
+done
+```
+
+### Notes
+- Only ENIs in `available` status are deleted — in-use ENIs are left alone.
+- This runs after Lambda functions are deleted (by terraform destroy) but before
+  the VPC deletion step. Because terraform deletes resources in dependency order,
+  the VPC is always last.
+- `destroy-env.sh` adds this cleanup in a post-destroy hook via `-target` ordering.
+
+---
+
 ## Checklist — Before Running `setup-env.sh`
 
 - [ ] `AWS_PROFILE` / `--profile` set to `nyk-tf`
