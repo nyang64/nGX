@@ -47,13 +47,5 @@ resource "aws_lambda_event_source_mapping" "ses_events" {
 }
 
 # ── EventBridge → Lambda Permission ──────────────────────────────────────────
-# scheduler_bounce is removed — SES handles bounce detection via ses_events Lambda.
-# eventbridge.tf defines the rule and target; permission granted here.
-
-resource "aws_lambda_permission" "scheduler_drafts_eventbridge" {
-  statement_id  = "AllowEventBridgeInvokeSchedulerDrafts"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.scheduler_drafts.function_name
-  principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.scheduler_drafts.arn
-}
+# scheduler_drafts EventBridge permission is defined in eventbridge.tf
+# (alongside the rule and target) to avoid duplicate statement IDs.

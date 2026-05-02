@@ -26,9 +26,6 @@ resource "aws_ses_configuration_set" "main" {
     tls_policy = "Require"
   }
 
-  # Enable engagement tracking for click and open events.
-  tracking_options {}
-
   reputation_metrics_enabled = true
   sending_enabled            = true
 }

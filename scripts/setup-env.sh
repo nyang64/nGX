@@ -158,17 +158,53 @@ echo
 # ─────────────────────────────────────────────────────────────────────────────
 log "=== STEP 2: Terraform init + apply ==="
 
-# Source .env so TF_VAR_* variables are exported into the environment
-# (loadenv.sh uses 'set -a' which requires an interactive shell; replicate it here)
+# Source .env so TF_VAR_* variables are exported into the environment.
+# IMPORTANT: .env contains ENVIRONMENT=production (the app runtime value) which
+# would overwrite the script's ENVIRONMENT=prod (the terraform resource suffix).
+# Save and restore the script-level CLI arg values after sourcing to prevent that.
+_SAVE_APP_NAME="$APP_NAME"
+_SAVE_ENVIRONMENT="$ENVIRONMENT"
+_SAVE_AWS_REGION="$AWS_REGION"
+_SAVE_AWS_PROFILE="$AWS_PROFILE"
+
 set -a
 # shellcheck disable=SC1090
 source <(grep -v '^#' "${REPO_ROOT}/.env" | grep -v '^$' | sed 's/[[:space:]]*#.*$//')
 set +a
 
+# Restore CLI-specified values (override whatever .env set for these keys)
+APP_NAME="$_SAVE_APP_NAME"
+ENVIRONMENT="$_SAVE_ENVIRONMENT"
+AWS_REGION="$_SAVE_AWS_REGION"
+AWS_PROFILE="$_SAVE_AWS_PROFILE"
+PREFIX="${APP_NAME}-${ENVIRONMENT}"
+
 export AWS_PROFILE AWS_REGION
 
 log "Running terraform init..."
 terraform -chdir="$TF_DIR" init
+
+# Pre-apply: force-delete any Secrets Manager secrets that are scheduled for deletion.
+# AWS enforces a 7–30 day recovery window which blocks re-creation with the same name.
+# This situation occurs when a previous apply created the secret and then failed —
+# terraform destroy puts it in pending-deletion but can't immediately remove it.
+log "Checking for Secrets Manager secrets pending deletion..."
+for secret_name in "${PREFIX}/db-password"; do
+  pending_arn=$(aws_cmd secretsmanager list-secrets \
+    --filters "Key=name,Values=${secret_name}" \
+    --query 'SecretList[?DeletedDate!=null].ARN' \
+    --output text 2>/dev/null || true)
+  if [[ -n "$pending_arn" && "$pending_arn" != "None" ]]; then
+    log "  Force-deleting pending secret: ${secret_name}"
+    aws_cmd secretsmanager delete-secret \
+      --secret-id "$pending_arn" \
+      --force-delete-without-recovery \
+      || warn "Failed to force-delete ${secret_name} — terraform apply may fail if it still exists."
+    sleep 5   # Allow propagation before apply
+  else
+    log "  No pending secrets found for: ${secret_name}"
+  fi
+done
 
 log "Running terraform apply (this takes 20–35 minutes)..."
 terraform -chdir="$TF_DIR" apply \
@@ -199,7 +235,13 @@ log "  REST_API_ENDPOINT     : ${REST_API_ENDPOINT:-<not set>}"
 log "  RDS_PROXY_ENDPOINT    : ${RDS_PROXY_ENDPOINT:-<not set>}"
 log "  DATABASE_URL          : set (not printed)"
 
-[[ -n "${RDS_PROXY_ENDPOINT:-}" ]] || die "RDS_PROXY_ENDPOINT is empty after sync-env.sh — check terraform outputs."
+# RDS_PROXY_ENDPOINT may not be in older .env.outputs — fall back to terraform output
+if [[ -z "${RDS_PROXY_ENDPOINT:-}" ]]; then
+  RDS_PROXY_ENDPOINT=$(terraform -chdir="$TF_DIR" output -raw rds_proxy_endpoint 2>/dev/null || true)
+  log "  RDS_PROXY_ENDPOINT (from tf output): ${RDS_PROXY_ENDPOINT:-<not set>}"
+fi
+
+[[ -n "${RDS_PROXY_ENDPOINT:-}" ]] || die "RDS_PROXY_ENDPOINT is empty — check terraform outputs."
 
 log "STEP 3 complete."
 echo
