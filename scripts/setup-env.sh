@@ -700,7 +700,7 @@ if [[ "$SES_DNS_NEEDED" == "true" ]]; then
 fi
 
 if [[ "$_BOOTSTRAP_DONE" == "false" && "$SKIP_BOOTSTRAP" != "true" ]]; then
-  _NEXT_STEPS+=("Bootstrap org:  make bootstrap org='My Org' slug='my-org'")
+  _NEXT_STEPS+=("Bootstrap org:  make bootstrap org='${ORG_NAME:-My Org}' slug='${ORG_SLUG:-my-org}'")
 fi
 
 if [[ ${#_NEXT_STEPS[@]} -gt 0 ]]; then
