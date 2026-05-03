@@ -253,6 +253,21 @@ fi
 log "STEP 1 complete."
 echo
 
+# Clean up orphaned DB subnet groups that may be left by partial or failed applies.
+# Both naming patterns have been observed: ${PREFIX}- and ngx-production-.
+log "=== Cleaning up orphaned DB subnet groups ==="
+for sg_prefix in "${PREFIX}-" "ngx-production-"; do
+  orphan_groups=$(aws_cmd rds describe-db-subnet-groups \
+    --query "DBSubnetGroups[?starts_with(DBSubnetGroupName,\`${sg_prefix}\`)].DBSubnetGroupName" \
+    --output text 2>/dev/null || true)
+  for grp in $orphan_groups; do
+    [[ "$grp" == "None" || -z "$grp" ]] && continue
+    log "  Deleting orphaned DB subnet group: $grp"
+    aws_cmd rds delete-db-subnet-group --db-subnet-group-name "$grp" \
+      || warn "  Could not delete $grp (may be in use — will retry on next destroy run)"
+  done
+done
+
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 2 — Drain and delete S3 buckets
 # ─────────────────────────────────────────────────────────────────────────────
@@ -402,6 +417,15 @@ if [[ -n "$VPC_ID" && "$VPC_ID" != "None" ]]; then
           --network-interface-id "$eni" 2>/dev/null && \
           echo "[eni-watcher] Deleted Lambda ENI: $eni" || true
       done
+      inuse_enis=$(aws ec2 describe-network-interfaces \
+        --profile "$AWS_PROFILE" --region "$AWS_REGION" \
+        --filters "Name=vpc-id,Values=${VPC_ID}" "Name=status,Values=in-use" \
+        --query 'NetworkInterfaces[?starts_with(Description,`AWS Lambda VPC ENI`)].NetworkInterfaceId' \
+        --output text 2>/dev/null || true)
+      for eni in $inuse_enis; do
+        [[ "$eni" == "None" || -z "$eni" ]] && continue
+        echo "[eni-watcher] Lambda ENI still in-use (draining): $eni"
+      done
     done
   ) &
   ENI_WATCHER_PID=$!
@@ -497,6 +521,19 @@ fi
 echo
 if [[ $ERRORS -eq 0 ]]; then
   log "=== ALL CHECKS PASSED — ${PREFIX} environment fully destroyed ==="
+
+  # Wipe local terraform state so that a subsequent setup-env.sh starts clean.
+  # An empty-but-valid state file prevents "already exists" import errors caused
+  # by state records referencing resources that no longer exist in AWS.
+  TF_STATE_FILE="${TF_DIR}/terraform.tfstate"
+  TF_STATE_BACKUP="${TF_DIR}/terraform.tfstate.backup"
+  if [[ -f "$TF_STATE_FILE" ]]; then
+    log "Wiping local terraform state for clean next run..."
+    printf '{"version":4,"terraform_version":"1.0.0","serial":0,"lineage":"","outputs":{},"resources":[]}' \
+      > "$TF_STATE_FILE"
+    [[ -f "$TF_STATE_BACKUP" ]] && rm -f "$TF_STATE_BACKUP" && log "  Removed terraform.tfstate.backup"
+    log "  terraform.tfstate reset to empty."
+  fi
 else
   warn "=== ${ERRORS} check(s) FAILED — some resources may still exist ==="
   exit 1
