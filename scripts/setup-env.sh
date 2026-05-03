@@ -538,6 +538,7 @@ echo
 # ─────────────────────────────────────────────────────────────────────────────
 log "=== STEP 7: Bootstrap initial org ==="
 
+_BOOTSTRAP_DONE=false
 if [[ "$SKIP_BOOTSTRAP" == "true" ]]; then
   log "  --skip-bootstrap set — skipping."
 else
@@ -555,6 +556,7 @@ else
     log "  No org name provided — skipping bootstrap."
     log "  Run manually later: make bootstrap org='My Org' slug='my-org'"
   else
+    _BOOTSTRAP_DONE=true
     if [[ -z "$ORG_SLUG" ]]; then
       # Default slug: lowercase org name, spaces → dashes
       ORG_SLUG=$(echo "$ORG_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/ /-/g' | sed 's/[^a-z0-9-]//g')
@@ -598,42 +600,53 @@ echo
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 8 — Print post-apply DNS records
 # ─────────────────────────────────────────────────────────────────────────────
-log "=== STEP 8: Post-apply DNS records ==="
+log "=== STEP 8: DNS / SES verification ==="
 
 MAIL_DOMAIN="${TF_VAR_mail_domain:-$(grep -E '^TF_VAR_mail_domain=' "${REPO_ROOT}/.env" | cut -d= -f2-)}"
 
-log "Add the following DNS records at your DNS provider for: ${MAIL_DOMAIN}"
-echo
-echo "  ── SES domain verification (TXT) ──────────────────────────────────"
-VERIFY_TOKEN=$(terraform -chdir="$TF_DIR" output -raw ses_verification_token 2>/dev/null || echo "<run: terraform output ses_verification_token>")
-echo "  Type : TXT"
-echo "  Host : _amazonses.${MAIL_DOMAIN}"
-echo "  Value: ${VERIFY_TOKEN}"
-echo
+SES_VERIFY_STATUS=$(aws_cmd ses get-identity-verification-attributes \
+  --identities "${MAIL_DOMAIN}" \
+  --query 'VerificationAttributes.*.VerificationStatus' \
+  --output text 2>/dev/null || echo "Unknown")
 
-echo "  ── DKIM CNAME records (×3) ─────────────────────────────────────────"
-DKIM_TOKENS=$(terraform -chdir="$TF_DIR" output -json ses_dkim_tokens 2>/dev/null \
-  | jq -r '.[]' 2>/dev/null || echo "")
-
-if [[ -n "$DKIM_TOKENS" ]]; then
-  while IFS= read -r token; do
-    echo "  Type : CNAME"
-    echo "  Host : ${token}._domainkey.${MAIL_DOMAIN}"
-    echo "  Value: ${token}.dkim.amazonses.com"
-    echo
-  done <<< "$DKIM_TOKENS"
+SES_DNS_NEEDED=false
+if [[ "$SES_VERIFY_STATUS" == "Success" ]]; then
+  log "  SES domain '${MAIL_DOMAIN}' is already verified — no DNS changes needed."
 else
-  echo "  (run: terraform -chdir=terraform output ses_dkim_tokens)"
+  SES_DNS_NEEDED=true
+  log "  SES domain '${MAIL_DOMAIN}' is NOT verified (status: ${SES_VERIFY_STATUS})."
+  log "  Add the following DNS records at your DNS provider:"
+  echo
+  echo "  ── SES domain verification (TXT) ──────────────────────────────────"
+  VERIFY_TOKEN=$(terraform -chdir="$TF_DIR" output -raw ses_verification_token 2>/dev/null || echo "<run: terraform output ses_verification_token>")
+  echo "  Type : TXT"
+  echo "  Host : _amazonses.${MAIL_DOMAIN}"
+  echo "  Value: ${VERIFY_TOKEN}"
+  echo
+
+  echo "  ── DKIM CNAME records (×3) ─────────────────────────────────────────"
+  DKIM_TOKENS=$(terraform -chdir="$TF_DIR" output -json ses_dkim_tokens 2>/dev/null \
+    | jq -r '.[]' 2>/dev/null || echo "")
+  if [[ -n "$DKIM_TOKENS" ]]; then
+    while IFS= read -r token; do
+      echo "  Type : CNAME"
+      echo "  Host : ${token}._domainkey.${MAIL_DOMAIN}"
+      echo "  Value: ${token}.dkim.amazonses.com"
+      echo
+    done <<< "$DKIM_TOKENS"
+  else
+    echo "  (run: terraform -chdir=terraform output ses_dkim_tokens)"
+    echo
+  fi
+
+  echo "  After adding records, poll until verified:"
+  echo "  aws ses get-identity-verification-attributes \\"
+  echo "    --profile ${AWS_PROFILE} --region ${AWS_REGION} \\"
+  echo "    --identities ${MAIL_DOMAIN} \\"
+  echo "    --query 'VerificationAttributes.*.VerificationStatus'"
+  echo "  # Wait for: [\"Success\"]"
   echo
 fi
-
-echo "  ── Poll for SES verification ────────────────────────────────────────"
-echo "  aws ses get-identity-verification-attributes \\"
-echo "    --profile ${AWS_PROFILE} --region ${AWS_REGION} \\"
-echo "    --identities ${MAIL_DOMAIN} \\"
-echo "    --query 'VerificationAttributes.*.VerificationStatus'"
-echo "  # Wait for: [\"Success\"]"
-echo
 
 log "STEP 8 complete."
 echo
@@ -678,12 +691,30 @@ echo "============================================================"
 log "=== ${PREFIX} environment setup complete ==="
 echo "============================================================"
 echo
-echo "Next steps:"
-echo "  1. Add DNS records printed in STEP 8 above."
-echo "  2. Wait for SES domain verification (5–15 min)."
-echo "  3. Source the environment:  source loadenv.sh"
-echo "  4. Run a full smoke test:   see docs/runbook-deployment.md §A10"
-if [[ "$SKIP_BOOTSTRAP" != "true" && -z "$ORG_NAME" ]]; then
-  echo "  5. Bootstrap org:           make bootstrap org='My Org' slug='my-org'"
+
+# Build a list of any genuinely remaining manual steps
+_NEXT_STEPS=()
+
+if [[ "$SES_DNS_NEEDED" == "true" ]]; then
+  _NEXT_STEPS+=("Add DNS records printed in STEP 8 above, then wait for SES verification (5–15 min).")
 fi
+
+if [[ "$_BOOTSTRAP_DONE" == "false" && "$SKIP_BOOTSTRAP" != "true" ]]; then
+  _NEXT_STEPS+=("Bootstrap org:  make bootstrap org='My Org' slug='my-org'")
+fi
+
+if [[ ${#_NEXT_STEPS[@]} -gt 0 ]]; then
+  echo "Manual steps still required:"
+  i=1
+  for step in "${_NEXT_STEPS[@]}"; do
+    echo "  ${i}. ${step}"
+    i=$((i + 1))
+  done
+else
+  echo "  No manual steps required — environment is fully operational."
+fi
+echo
+echo "Useful commands:"
+echo "  source loadenv.sh                        # load env vars into your shell"
+echo "  make test-integration                    # run the full integration test suite"
 echo
