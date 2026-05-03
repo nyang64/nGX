@@ -541,9 +541,14 @@ log "=== STEP 7: Bootstrap initial org ==="
 if [[ "$SKIP_BOOTSTRAP" == "true" ]]; then
   log "  --skip-bootstrap set — skipping."
 else
-  # Prompt for org/slug if not provided via CLI flags
+  # Prompt for org/slug if not provided via CLI flags.
+  # Skip the prompt when stdin is not a terminal (non-interactive / nohup run).
   if [[ -z "$ORG_NAME" ]]; then
-    read -r -p "  Organisation name (or press Enter to skip bootstrap): " ORG_NAME
+    if [[ -t 0 ]]; then
+      read -r -p "  Organisation name (or press Enter to skip bootstrap): " ORG_NAME
+    else
+      log "  Non-interactive run — skipping org bootstrap prompt."
+    fi
   fi
 
   if [[ -z "$ORG_NAME" ]]; then
