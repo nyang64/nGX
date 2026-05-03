@@ -179,6 +179,11 @@ AWS_REGION="$_SAVE_AWS_REGION"
 AWS_PROFILE="$_SAVE_AWS_PROFILE"
 PREFIX="${APP_NAME}-${ENVIRONMENT}"
 
+# Pick up bootstrap org/slug from .env if not provided via --org/--slug CLI flags.
+# BOOTSTRAP_ORG_NAME and BOOTSTRAP_ORG_SLUG are sourced from .env above.
+[[ -z "$ORG_NAME" && -n "${BOOTSTRAP_ORG_NAME:-}" ]] && ORG_NAME="$BOOTSTRAP_ORG_NAME"
+[[ -z "$ORG_SLUG" && -n "${BOOTSTRAP_ORG_SLUG:-}" ]] && ORG_SLUG="$BOOTSTRAP_ORG_SLUG"
+
 export AWS_PROFILE AWS_REGION
 
 log "Running terraform init..."
