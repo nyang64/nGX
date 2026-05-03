@@ -90,7 +90,7 @@ log "  Repo root : $REPO_ROOT"
 echo
 
 # Required tools
-for tool in aws terraform jq go make openssl; do
+for tool in aws terraform jq go make openssl psql; do
   command -v "$tool" &>/dev/null || die "Required tool not found: $tool"
 done
 
@@ -563,7 +563,7 @@ else
       log "  Derived slug: ${ORG_SLUG}"
     fi
 
-    # Open SSM tunnel again for bootstrap
+    # Open SSM tunnel for bootstrap preflight check + bootstrap itself
     log "  Opening SSM tunnel for bootstrap..."
     aws_cmd ssm start-session \
       --target "$BASTION_ID" \
@@ -579,18 +579,30 @@ else
       [[ $TUNNEL_WAIT -lt 60 ]] || die "SSM tunnel did not open on port ${TUNNEL_PORT} within 60s."
     done
 
-    log "  Creating org '${ORG_NAME}' (slug: ${ORG_SLUG})..."
-    cd "$REPO_ROOT"
-    DATABASE_URL="$TUNNEL_DATABASE_URL" go run ./tools/bootstrap \
-      -org "${ORG_NAME}" \
-      -slug "${ORG_SLUG}" \
-      | tee /dev/stderr 2>&1 | grep -E 'Key:|API key|am_live_' || true
+    # Preflight: check if the slug already exists in the organizations table.
+    # Duplicate slug violates the UNIQUE constraint; duplicate name silently creates
+    # a second org with a different ID.  Either way we should skip, not fail.
+    EXISTING_ORG=$(psql "${TUNNEL_DATABASE_URL}" -tAq \
+      -c "SELECT name FROM organizations WHERE slug = '${ORG_SLUG}' LIMIT 1" \
+      2>/dev/null || true)
+
+    if [[ -n "$EXISTING_ORG" ]]; then
+      log "  Org with slug '${ORG_SLUG}' already exists (name: '${EXISTING_ORG}') — skipping bootstrap."
+      _BOOTSTRAP_DONE=true
+    else
+      log "  Creating org '${ORG_NAME}' (slug: ${ORG_SLUG})..."
+      cd "$REPO_ROOT"
+      DATABASE_URL="$TUNNEL_DATABASE_URL" go run ./tools/bootstrap \
+        -org "${ORG_NAME}" \
+        -slug "${ORG_SLUG}" \
+        | tee /dev/stderr 2>&1 | grep -E 'Key:|API key|am_live_' || true
+
+      echo
+      log "  *** Save the API key printed above — it will not be shown again. ***"
+    fi
 
     kill "$SSM_TUNNEL_PID" 2>/dev/null || true
     SSM_TUNNEL_PID=""
-
-    echo
-    log "  *** Save the API key printed above — it will not be shown again. ***"
   fi
 fi
 
