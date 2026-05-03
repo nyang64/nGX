@@ -191,6 +191,7 @@ terraform -chdir="$TF_DIR" init
 log "Checking for Secrets Manager secrets pending deletion..."
 for secret_name in "${PREFIX}/db-password"; do
   pending_arn=$(aws_cmd secretsmanager list-secrets \
+    --include-planned-deletion \
     --filters "Key=name,Values=${secret_name}" \
     --query 'SecretList[?DeletedDate!=null].ARN' \
     --output text 2>/dev/null || true)
@@ -213,6 +214,35 @@ terraform -chdir="$TF_DIR" apply \
   -var "aws_region=${AWS_REGION}" \
   -var "app_name=${APP_NAME}" \
   -var "environment=${ENVIRONMENT}"
+
+# Post-apply: verify the bastion → RDS proxy egress SG rule exists.
+# This rule is tracked via aws_security_group_rule (separate from the SG resource)
+# and can get into a state-drift loop during interrupted applies.  We check AWS
+# directly (ground truth) and add the rule if it is missing, regardless of state.
+log "Verifying bastion → RDS proxy security group rule..."
+BASTION_SG_ID=$(aws_cmd ec2 describe-security-groups \
+  --filters "Name=group-name,Values=${PREFIX}-bastion" \
+  --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || true)
+RDS_PROXY_SG_ID=$(aws_cmd ec2 describe-security-groups \
+  --filters "Name=group-name,Values=${PREFIX}-rds-proxy" \
+  --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || true)
+if [[ -n "$BASTION_SG_ID" && "$BASTION_SG_ID" != "None" && \
+      -n "$RDS_PROXY_SG_ID" && "$RDS_PROXY_SG_ID" != "None" ]]; then
+  existing_port=$(aws_cmd ec2 describe-security-groups \
+    --group-ids "$BASTION_SG_ID" \
+    --query 'SecurityGroups[0].IpPermissionsEgress[?FromPort==`5432`].FromPort' \
+    --output text 2>/dev/null || true)
+  if [[ "$existing_port" != "5432" ]]; then
+    log "  Port 5432 egress missing — adding rule directly to AWS (state drift workaround)..."
+    aws_cmd ec2 authorize-security-group-egress \
+      --group-id "$BASTION_SG_ID" \
+      --ip-permissions "IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=${RDS_PROXY_SG_ID},Description=PostgreSQL to RDS Proxy}]" \
+      >/dev/null 2>&1 \
+      || warn "Could not add bastion → proxy egress rule (may already exist or SGs not ready yet)"
+  else
+    log "  Bastion → RDS proxy egress rule OK."
+  fi
+fi
 
 log "STEP 2 complete."
 echo

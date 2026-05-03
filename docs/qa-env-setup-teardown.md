@@ -334,6 +334,156 @@ done
 
 ---
 
+---
+
+## Issue 11 — `list-secrets` misses pending-deletion secrets without `--include-planned-deletion`
+
+**Phase:** setup (pre-apply secret cleanup)
+**Severity:** High — terraform apply fails with "secret scheduled for deletion" even after cleanup ran
+**Status:** Fixed in `setup-env.sh`
+
+### Symptom
+`setup-env.sh` reports "No pending secrets found" and proceeds. Terraform apply then fails:
+```
+InvalidRequestException: You can't create this secret because a secret with this name
+is already scheduled for deletion.
+```
+
+### Root cause
+AWS `list-secrets` does not return secrets in the pending-deletion state unless
+`--include-planned-deletion` is passed. The cleanup loop ran but found nothing,
+so the pending-deletion secret was not force-deleted before terraform apply ran.
+
+### Fix applied
+Added `--include-planned-deletion` to the `list-secrets` call in setup-env.sh:
+```bash
+aws_cmd secretsmanager list-secrets \
+  --include-planned-deletion \
+  --filters "Key=name,Values=${secret_name}" \
+  --query 'SecretList[?DeletedDate!=null].ARN' ...
+```
+
+---
+
+## Issue 12 — Bastion → RDS Proxy SG egress rule: persistent state drift
+
+**Phase:** setup (Step 5 — SSM tunnel to RDS proxy)
+**Severity:** Critical — psql hangs, migrations and bootstrap cannot run
+**Status:** Fixed in `setup-env.sh` (post-apply verification step)
+
+### Symptom
+After terraform apply completes, the SSM tunnel opens on port 15432 (TCP handshake
+succeeds) but psql hangs or times out. Root cause: the bastion security group has
+only port 443 egress — port 5432 is missing.
+
+### Root cause
+`aws_security_group_rule.bastion_to_rds_proxy` is a standalone SG rule resource
+(separate from the SG itself). When terraform applies are interrupted or run in
+multiple phases with `-target`, this resource enters a state-drift loop:
+- State records a `sgr-*` ID that no longer exists in AWS
+- On subsequent applies, terraform detects the drift and tries to recreate the rule
+- Due to race conditions or apply interruption, the rule ends up not existing in AWS
+  even though state says it does
+
+This happens reliably in the following sequence:
+1. First apply interrupted (secret issue, stuck process, etc.)
+2. Second apply skips the SG rule because state says it exists
+3. SG rule is actually absent from AWS
+
+### Fix applied
+`setup-env.sh` now runs a post-apply verification step that checks AWS directly
+(not via terraform state) and adds the egress rule if missing:
+```bash
+existing_port=$(aws ec2 describe-security-groups \
+  --group-ids "$BASTION_SG_ID" \
+  --query 'SecurityGroups[0].IpPermissionsEgress[?FromPort==`5432`].FromPort' \
+  --output text)
+if [[ "$existing_port" != "5432" ]]; then
+  aws ec2 authorize-security-group-egress \
+    --group-id "$BASTION_SG_ID" \
+    --ip-permissions "IpProtocol=tcp,FromPort=5432,ToPort=5432,..."
+fi
+```
+
+This runs unconditionally after every terraform apply, so state drift on this rule
+can never block migrations.
+
+### Notes
+- The underlying terraform state drift is not fixed — the resource will continue to
+  drift. The workaround bypasses terraform for this one rule.
+- Long-term fix: move the rule into an inline `egress {}` block on `aws_security_group.bastion`
+  so it is part of the SG resource and cannot drift independently.
+
+---
+
+## Issue 13 — `terraform apply` terminates before all resources created; partial state requires manual imports
+
+**Phase:** setup (terraform apply)
+**Severity:** High — environment unusable until imports reconcile state
+**Status:** Operational workaround documented; fix in progress
+
+### Symptom
+After `terraform apply` exits (crash, interrupt, or secret error), the terraform
+state is partially written. Subsequent applies fail with:
+```
+DBInstanceAlreadyExists: DB instance already exists
+ResourceConflictException: Function already exist: ngx-prod-search
+```
+
+### Root cause
+When the first apply fails partway, some resources were created in AWS but their
+state was not saved (or saved with wrong IDs). Re-running apply tries to CREATE
+them again instead of adopting the existing ones.
+
+### Manual recovery steps
+For each resource that already exists in AWS but not state, import it:
+```bash
+# Aurora instance (count=1, so use [0])
+terraform import 'aws_rds_cluster_instance.main[0]' "ngx-prod-instance-0"
+
+# Lambda function
+terraform import aws_lambda_function.search "ngx-prod-search"
+
+# SG rule (format: sgId_direction_proto_fromPort_toPort_sourceGroupId)
+terraform import aws_security_group_rule.bastion_to_rds_proxy \
+  "sg-xxx_egress_tcp_5432_5432_sg-yyy"
+```
+Then re-run `terraform apply` until it reports `0 to add, N to change, 0 to destroy`.
+
+### Prevention
+setup-env.sh now forces a clean state before apply (pre-apply secret cleanup),
+which reduces the chance of mid-apply failure. The SG rule drift is handled by the
+post-apply verification step (Issue 12 fix).
+
+---
+
+## Issue 14 — RDS Proxy target group has no targets after fresh apply
+
+**Phase:** setup (Step 5 — tunnel to proxy)
+**Severity:** High — proxy is available but connections close immediately
+**Status:** Operational; `aws_db_proxy_target.main` must be present in state
+
+### Symptom
+After terraform apply, the RDS proxy is `available` but psql gets:
+```
+server closed the connection unexpectedly
+```
+Checking proxy targets returns `[]` (empty list).
+
+### Root cause
+`aws_db_proxy_target.main` was not in state after a partial apply. The proxy
+exists but has no registered Aurora cluster as a backend, so it accepts TCP
+connections and then immediately closes them.
+
+### Fix applied
+After running any partial or targeted apply, ensure the proxy target is created:
+```bash
+terraform apply -target=aws_db_proxy_target.main
+```
+Wait ~3 minutes for `TargetHealth.State` to become `AVAILABLE` before connecting.
+
+---
+
 ## Checklist — Before Running `setup-env.sh`
 
 - [ ] `AWS_PROFILE` / `--profile` set to `nyk-tf`
