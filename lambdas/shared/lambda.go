@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -68,10 +69,31 @@ func ExtractClaims(event events.APIGatewayProxyRequest) (*authpkg.Claims, error)
 		}
 	}
 
+	plan, _ := auth["plan"].(string)
+	featuresStr, _ := auth["features"].(string)
+	seatLimitStr, _ := auth["seat_limit"].(string)
+
+	var features []string
+	for _, f := range strings.Split(featuresStr, ",") {
+		f = strings.TrimSpace(f)
+		if f != "" {
+			features = append(features, f)
+		}
+	}
+	seatLimit := -1
+	if seatLimitStr != "" {
+		if n, err := strconv.Atoi(seatLimitStr); err == nil {
+			seatLimit = n
+		}
+	}
+
 	claims := &authpkg.Claims{
-		OrgID:  orgID,
-		KeyID:  keyID,
-		Scopes: scopes,
+		OrgID:     orgID,
+		KeyID:     keyID,
+		Scopes:    scopes,
+		Plan:      plan,
+		Features:  features,
+		SeatLimit: seatLimit,
 	}
 	if podIDStr != "" {
 		podID, err := uuid.Parse(podIDStr)

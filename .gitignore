@@ -36,6 +36,8 @@ go.work.sum
 *.key
 *.crt
 secrets/
+# Public key for license JWT verification (not a secret — safe to commit)
+!lambdas/authorizer/keys/license_public.pem
 
 # ------------------------------------------------------------
 # IDE and editor files

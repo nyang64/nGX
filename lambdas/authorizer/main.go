@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -74,6 +75,12 @@ func handler(ctx context.Context, event authorizerEvent) (events.APIGatewayCusto
 		return deny("anonymous", event.MethodArn), nil
 	}
 
+	licenseClaims, err := checkLicense(ctx, claims.OrgID.String())
+	if err != nil {
+		slog.Warn("authorizer: license check failed", "error", err, "org_id", claims.OrgID)
+		return deny("anonymous", event.MethodArn), nil
+	}
+
 	// Allow invocation of all methods in this API (wildcard resource ARNs).
 	// REST:      arn:aws:execute-api:region:account:api-id/stage/METHOD/resource  → needs prod/*/*
 	// WebSocket: arn:aws:execute-api:region:account:api-id/stage/$connect         → needs prod/*
@@ -93,9 +100,12 @@ func handler(ctx context.Context, event authorizerEvent) (events.APIGatewayCusto
 			},
 		},
 		Context: map[string]interface{}{
-			"org_id": claims.OrgID.String(),
-			"key_id": claims.KeyID.String(),
-			"scopes": strings.Join(scopeStrings(claims.Scopes), ","),
+			"org_id":     claims.OrgID.String(),
+			"key_id":     claims.KeyID.String(),
+			"scopes":     strings.Join(scopeStrings(claims.Scopes), ","),
+			"plan":       licenseClaims.Plan,
+			"features":   strings.Join(licenseClaims.Features, ","),
+			"seat_limit": strconv.Itoa(licenseClaims.SeatLimit),
 		},
 	}
 	if claims.PodID != nil {

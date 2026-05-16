@@ -54,3 +54,24 @@ resource "aws_lambda_permission" "scheduler_drafts_events" {
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.scheduler_drafts.arn
 }
+
+# ── License Refresh ────────────────────────────────────────────────────────────
+
+resource "aws_cloudwatch_event_rule" "license_refresh" {
+  name                = "${local.prefix}-license-refresh"
+  description         = "Renew license token every 24 hours"
+  schedule_expression = "rate(24 hours)"
+}
+
+resource "aws_cloudwatch_event_target" "license_refresh" {
+  rule = aws_cloudwatch_event_rule.license_refresh.name
+  arn  = aws_lambda_function.license_refresh.arn
+}
+
+resource "aws_lambda_permission" "license_refresh_events" {
+  statement_id  = "AllowEventBridgeLicenseRefresh"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.license_refresh.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.license_refresh.arn
+}

@@ -10,7 +10,8 @@ SHELL := /bin/bash
 # Lambda build configuration
 LAMBDA_NAMES := authorizer orgs auth inboxes threads messages drafts webhooks search domains \
                 ws_connect ws_disconnect email_inbound email_outbound \
-                event_dispatcher_webhook event_dispatcher_ws embedder ses_events scheduler_drafts
+                event_dispatcher_webhook event_dispatcher_ws embedder ses_events scheduler_drafts \
+                license_refresh
 
 DIST_DIR  := dist
 

@@ -662,3 +662,39 @@ resource "aws_lambda_function" "domains" {
 
   depends_on = [aws_cloudwatch_log_group.lambda_domains]
 }
+
+# ── license_refresh ───────────────────────────────────────────────────────────
+# EventBridge-triggered Lambda that renews the license token every 24 hours.
+# No VPC — calls public HTTPS endpoints only.
+
+resource "aws_cloudwatch_log_group" "lambda_license_refresh" {
+  name              = "/aws/lambda/${local.lambda_names.license_refresh}"
+  retention_in_days = local.log_retention_days
+}
+
+resource "aws_lambda_function" "license_refresh" {
+  function_name    = local.lambda_names.license_refresh
+  role             = aws_iam_role.lambda.arn
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["arm64"]
+  filename         = "${path.module}/../dist/lambdas/license_refresh.zip"
+  source_code_hash = filebase64sha256("${path.module}/../dist/lambdas/license_refresh.zip")
+  timeout          = 60
+  memory_size      = 128
+
+  environment {
+    variables = {
+      LICENSE_SERVER_URL     = "https://license.agent-mx.cc"
+      SSM_LICENSE_TOKEN_PATH = "/ngx/license-token"
+      ENVIRONMENT            = var.environment
+      AWS_REGION_NAME        = var.aws_region
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [source_code_hash, filename]
+  }
+
+  depends_on = [aws_cloudwatch_log_group.lambda_license_refresh]
+}

@@ -128,6 +128,15 @@ resource "aws_iam_role_policy" "lambda_app" {
         ]
         Resource = "arn:aws:logs:*:*:*"
       },
+      {
+        Sid    = "SSMLicenseToken"
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:PutParameter",
+        ]
+        Resource = "arn:aws:ssm:${var.aws_region}:*:parameter/ngx/*"
+      },
     ]
   })
 }

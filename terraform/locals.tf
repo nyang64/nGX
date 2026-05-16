@@ -33,6 +33,7 @@ locals {
     ses_events               = "${local.prefix}-ses-events"
     scheduler_drafts         = "${local.prefix}-scheduler-drafts"
     domains                  = "${local.prefix}-domains"
+    license_refresh          = "${local.prefix}-license-refresh"
   }
 
   # ── SQS queue names ─────────────────────────────────────────────────────────

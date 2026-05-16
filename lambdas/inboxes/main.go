@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -105,6 +106,15 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			}
 			inbox, err := inboxSv.Create(ctx, claims, req)
 			if err != nil {
+				var sle *inboxsvc.SeatLimitExceededError
+				if errors.As(err, &sle) {
+					return shared.JSON(403, map[string]interface{}{
+						"error":          "seat_limit_exceeded",
+						"message":        fmt.Sprintf("License allows up to %d active inboxes. Deactivate an inbox or upgrade your plan.", sle.Limit),
+						"seat_limit":     sle.Limit,
+						"active_inboxes": sle.Current,
+					}), nil
+				}
 				return shared.Error(400, err.Error()), nil
 			}
 			return shared.JSON(201, inbox), nil

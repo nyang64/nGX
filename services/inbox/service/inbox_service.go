@@ -67,6 +67,16 @@ func resolveInboxAddress(address, mailDomain string) (string, error) {
 	return address + "@" + mailDomain, nil
 }
 
+// SeatLimitExceededError is returned when an org has reached its licensed inbox limit.
+type SeatLimitExceededError struct {
+	Limit   int
+	Current int
+}
+
+func (e *SeatLimitExceededError) Error() string {
+	return fmt.Sprintf("seat_limit_exceeded: license allows up to %d active inboxes, currently at %d", e.Limit, e.Current)
+}
+
 // Create provisions a new inbox.
 func (s *InboxService) Create(ctx context.Context, claims *auth.Claims, req CreateInboxRequest) (*models.Inbox, error) {
 	address, err := resolveInboxAddress(req.Address, s.mailDomain)
@@ -81,6 +91,24 @@ func (s *InboxService) Create(ctx context.Context, claims *auth.Claims, req Crea
 			podID = claims.PodID
 		} else if *podID != *claims.PodID {
 			return nil, fmt.Errorf("pod-scoped key cannot create inboxes in a different pod")
+		}
+	}
+
+	// Enforce seat limit from license.
+	if claims.SeatLimit != -1 {
+		var activeCount int
+		err := s.pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM inboxes WHERE org_id = $1 AND status = 'active'`,
+			claims.OrgID,
+		).Scan(&activeCount)
+		if err != nil {
+			return nil, fmt.Errorf("seat limit check: %w", err)
+		}
+		if activeCount >= claims.SeatLimit {
+			return nil, &SeatLimitExceededError{
+				Limit:   claims.SeatLimit,
+				Current: activeCount,
+			}
 		}
 	}
 

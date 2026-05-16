@@ -18,6 +18,11 @@ type Claims struct {
 	Scopes []Scope
 	// PodID is non-nil when the key is scoped to a single pod.
 	PodID *uuid.UUID
+
+	// License fields — populated from the license token via the authorizer context.
+	Plan      string
+	Features  []string
+	SeatLimit int // -1 = unlimited
 }
 
 // HasScope reports whether the claims include s. org:admin implies all scopes.
