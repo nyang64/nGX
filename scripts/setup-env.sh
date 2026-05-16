@@ -380,7 +380,7 @@ _proxy_target_applied=false
 while true; do
   target_state=$(aws_cmd rds describe-db-proxy-targets \
     --db-proxy-name "$PROXY_NAME" \
-    --query 'Targets[0].TargetHealth.State' \
+    --query 'Targets[?Type==`RDS_INSTANCE`].TargetHealth.State | [0]' \
     --output text 2>/dev/null || echo "NOT_FOUND")
 
   if [[ "$target_state" == "AVAILABLE" ]]; then
