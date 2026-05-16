@@ -127,7 +127,7 @@ resource "aws_lambda_function" "authorizer" {
 
   environment {
     variables = merge(local.db_env, {
-      LICENSE_TRIAL_TOKEN = ""
+      LICENSE_TRIAL_TOKEN = "eyJhbGciOiJFUzI1NiIsImtpZCI6Im5neC1saWNlbnNlLXYxIiwidHlwIjoiSldUIn0.eyJpc3MiOiJsaWNlbnNlLmFnZW50LW14LmNjIiwiZXhwIjo5NjYyOTEyNTc1LCJpYXQiOjE3Nzg5MTI1NzUsImp0aSI6IjkxYTU1NTVkLTg3ZjEtNDY3Ny05MTA0LTQ3YWU2ZmMxMzdiYSIsInRva2VuX3ZlcnNpb24iOjEsIm9yZ19pZCI6IiIsImF3c19hY2NvdW50X2lkcyI6W10sImxpY2Vuc2Vfa2V5Ijoibmd4X3RyaWFsIiwicGxhbiI6InRyaWFsIiwiZmVhdHVyZXMiOlsid2ViaG9va3MiLCJ3ZWJzb2NrZXRzIiwidGV4dF9zZWFyY2giLCJzZW1hbnRpY19zZWFyY2giLCJjdXN0b21fZG9tYWluIl0sInNlYXRfbGltaXQiOi0xLCJyZW5ld2FsX2R1ZSI6MTc3ODk5ODk3NX0.5yGYyoTkjwnLH9zVBXvWscTN1EA6h11xEFpU_uXYyCvKmrLx-uimQDTG0YUzSeTDYISKX2j-LZYCDxRMUm-Hvw"
     })
   }
 
