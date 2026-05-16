@@ -13,13 +13,14 @@
 #     8. Provision and activate license token (needs LICENSE_SERVER_ADMIN_KEY in .env)
 #     9. Print post-apply DNS records to add (SES verification + DKIM)
 #    10. Smoke test
+#    11. Integration tests (unless --skip-integration)
 #
 # Usage:
 #   ./scripts/setup-env.sh [--profile <aws-profile>] [--region <region>] \
 #                          [--app <app_name>] [--env <environment>] \
 #                          [--tf-dir <path>] [--repo-root <path>] \
 #                          [--org <org-name>] [--slug <org-slug>] \
-#                          [--skip-bootstrap] [--skip-smoke] [--yes]
+#                          [--skip-bootstrap] [--skip-smoke] [--skip-integration] [--yes]
 #
 # Defaults match the current prod stack:
 #   profile = nyk-tf   region = us-east-1   app = ngx   env = prod
@@ -39,6 +40,7 @@ ORG_NAME=""
 ORG_SLUG=""
 SKIP_BOOTSTRAP=false
 SKIP_SMOKE=false
+SKIP_INTEGRATION=false
 AUTO_APPROVE=false
 
 SSM_TUNNEL_PID=""
@@ -54,9 +56,10 @@ while [[ $# -gt 0 ]]; do
     --repo-root)       REPO_ROOT="$2";         shift 2 ;;
     --org)             ORG_NAME="$2";          shift 2 ;;
     --slug)            ORG_SLUG="$2";          shift 2 ;;
-    --skip-bootstrap)  SKIP_BOOTSTRAP=true;    shift   ;;
-    --skip-smoke)      SKIP_SMOKE=true;        shift   ;;
-    --yes)             AUTO_APPROVE=true;       shift   ;;
+    --skip-bootstrap)    SKIP_BOOTSTRAP=true;    shift   ;;
+    --skip-smoke)        SKIP_SMOKE=true;        shift   ;;
+    --skip-integration)  SKIP_INTEGRATION=true;  shift   ;;
+    --yes)               AUTO_APPROVE=true;       shift   ;;
     *) echo "Unknown option: $1"; exit 1       ;;
   esac
 done
@@ -598,17 +601,44 @@ else
     else
       log "  Creating org '${ORG_NAME}' (slug: ${ORG_SLUG})..."
       cd "$REPO_ROOT"
-      DATABASE_URL="$TUNNEL_DATABASE_URL" go run ./tools/bootstrap \
+      BOOTSTRAP_OUT=$(DATABASE_URL="$TUNNEL_DATABASE_URL" go run ./tools/bootstrap \
         -org "${ORG_NAME}" \
-        -slug "${ORG_SLUG}" \
-        | tee /dev/stderr 2>&1 | grep -E 'Key:|API key|am_live_' || true
+        -slug "${ORG_SLUG}" 2>&1)
+      echo "$BOOTSTRAP_OUT"
 
-      echo
-      log "  *** Save the API key printed above — it will not be shown again. ***"
+      # Extract the API key and write it back to .env so sync-env.sh picks it up.
+      NEW_API_KEY=$(echo "$BOOTSTRAP_OUT" | grep -oE 'am_live_[A-Za-z0-9_-]+' | head -1 || true)
+      if [[ -n "$NEW_API_KEY" ]]; then
+        log "  Updating .env with new API key..."
+        if grep -q '^# Key:' "${REPO_ROOT}/.env" 2>/dev/null; then
+          sed -i '' "s|^# Key:.*|# Key:    ${NEW_API_KEY}|" "${REPO_ROOT}/.env"
+        else
+          printf '\n# Key:    %s\n' "${NEW_API_KEY}" >> "${REPO_ROOT}/.env"
+        fi
+      fi
+    fi
+
+    # Query org_id and update the # Org: comment in .env (tunnel still open)
+    NEW_ORG_ID=$(psql "${TUNNEL_DATABASE_URL}" -tAq \
+      -c "SELECT id FROM organizations WHERE slug = '${ORG_SLUG}' LIMIT 1" \
+      2>/dev/null | tr -d '[:space:]' || true)
+    if [[ -n "$NEW_ORG_ID" ]] && grep -q '^# Org:' "${REPO_ROOT}/.env" 2>/dev/null; then
+      sed -i '' "s|^# Org:.*|# Org:    ${ORG_NAME}  (${NEW_ORG_ID})|" "${REPO_ROOT}/.env"
     fi
 
     kill "$SSM_TUNNEL_PID" 2>/dev/null || true
     SSM_TUNNEL_PID=""
+
+    # Re-sync .env.outputs so TEST_API_KEY reflects the new bootstrap key.
+    if [[ -n "${NEW_API_KEY:-}" ]]; then
+      log "  Re-syncing .env.outputs with new API key..."
+      "${REPO_ROOT}/scripts/sync-env.sh" --profile "$AWS_PROFILE" --region "$AWS_REGION"
+      set -a
+      # shellcheck disable=SC1090
+      source <(grep -v '^#' "${REPO_ROOT}/.env.outputs" | grep -v '^$' | sed 's/[[:space:]]*#.*$//')
+      set +a
+      log "  TEST_API_KEY updated."
+    fi
   fi
 fi
 
@@ -807,6 +837,31 @@ log "STEP 10 complete."
 echo
 
 # ─────────────────────────────────────────────────────────────────────────────
+# STEP 11 — Integration tests
+# ─────────────────────────────────────────────────────────────────────────────
+log "=== STEP 11: Integration tests ==="
+
+if [[ "$SKIP_INTEGRATION" == "true" ]]; then
+  log "  --skip-integration set — skipping."
+else
+  if [[ -z "${TEST_BASE_URL:-}" || -z "${TEST_API_KEY:-}" ]]; then
+    warn "  TEST_BASE_URL or TEST_API_KEY not set — skipping integration tests."
+    warn "  Run manually: source loadenv.sh && make test-integration"
+  else
+    log "  Running integration test suite against ${TEST_BASE_URL} (~4 min)..."
+    cd "$REPO_ROOT"
+    if make test-integration; then
+      log "  All integration tests passed."
+    else
+      warn "  One or more integration tests FAILED — environment is up but tests need attention."
+    fi
+  fi
+fi
+
+log "STEP 11 complete."
+echo
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Done
 # ─────────────────────────────────────────────────────────────────────────────
 echo "============================================================"
@@ -818,7 +873,7 @@ echo
 _NEXT_STEPS=()
 
 if [[ "$SES_DNS_NEEDED" == "true" ]]; then
-  _NEXT_STEPS+=("Add DNS records printed in STEP 8 above, then wait for SES verification (5–15 min).")
+  _NEXT_STEPS+=("Add DNS records printed in STEP 9 above, then wait for SES verification (5–15 min).")
 fi
 
 if [[ "$_BOOTSTRAP_DONE" == "false" && "$SKIP_BOOTSTRAP" != "true" ]]; then
@@ -837,6 +892,6 @@ else
 fi
 echo
 echo "Useful commands:"
-echo "  source loadenv.sh                        # load env vars into your shell"
-echo "  make test-integration                    # run the full integration test suite"
+echo "  source loadenv.sh          # reload env vars into your shell"
+echo "  make test-integration      # re-run integration tests at any time"
 echo
