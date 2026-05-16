@@ -109,7 +109,9 @@ resource "aws_api_gateway_integration_response" "options_v1_org" {
   http_method         = aws_api_gateway_method.options_v1_org.http_method
   status_code         = aws_api_gateway_method_response.options_v1_org.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_org]
 }
+
 
 # Lambda permission
 resource "aws_lambda_permission" "orgs_api" {
@@ -199,7 +201,9 @@ resource "aws_api_gateway_integration_response" "options_v1_pods" {
   http_method         = aws_api_gateway_method.options_v1_pods.http_method
   status_code         = aws_api_gateway_method_response.options_v1_pods.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_pods]
 }
+
 
 # ── /v1/pods/{podId} ──────────────────────────────────────────────────────────
 
@@ -295,7 +299,9 @@ resource "aws_api_gateway_integration_response" "options_v1_pods_pod_id" {
   http_method         = aws_api_gateway_method.options_v1_pods_pod_id.http_method
   status_code         = aws_api_gateway_method_response.options_v1_pods_pod_id.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_pods_pod_id]
 }
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # /v1/keys
@@ -376,7 +382,9 @@ resource "aws_api_gateway_integration_response" "options_v1_keys" {
   http_method         = aws_api_gateway_method.options_v1_keys.http_method
   status_code         = aws_api_gateway_method_response.options_v1_keys.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_keys]
 }
+
 
 # Lambda permission
 resource "aws_lambda_permission" "auth_api" {
@@ -464,7 +472,9 @@ resource "aws_api_gateway_integration_response" "options_v1_keys_key_id" {
   http_method         = aws_api_gateway_method.options_v1_keys_key_id.http_method
   status_code         = aws_api_gateway_method_response.options_v1_keys_key_id.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_keys_key_id]
 }
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # /v1/inboxes
@@ -545,7 +555,9 @@ resource "aws_api_gateway_integration_response" "options_v1_inboxes" {
   http_method         = aws_api_gateway_method.options_v1_inboxes.http_method
   status_code         = aws_api_gateway_method_response.options_v1_inboxes.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_inboxes]
 }
+
 
 # Lambda permission
 resource "aws_lambda_permission" "inboxes_api" {
@@ -650,7 +662,9 @@ resource "aws_api_gateway_integration_response" "options_v1_inboxes_inbox_id" {
   http_method         = aws_api_gateway_method.options_v1_inboxes_inbox_id.http_method
   status_code         = aws_api_gateway_method_response.options_v1_inboxes_inbox_id.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_inboxes_inbox_id]
 }
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # /v1/inboxes/{inboxId}/threads
@@ -714,7 +728,9 @@ resource "aws_api_gateway_integration_response" "options_v1_inboxes_inbox_id_thr
   http_method         = aws_api_gateway_method.options_v1_inboxes_inbox_id_threads.http_method
   status_code         = aws_api_gateway_method_response.options_v1_inboxes_inbox_id_threads.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_inboxes_inbox_id_threads]
 }
+
 
 # Lambda permission
 resource "aws_lambda_permission" "threads_api" {
@@ -802,7 +818,9 @@ resource "aws_api_gateway_integration_response" "options_v1_inboxes_inbox_id_thr
   http_method         = aws_api_gateway_method.options_v1_inboxes_inbox_id_threads_thread_id.http_method
   status_code         = aws_api_gateway_method_response.options_v1_inboxes_inbox_id_threads_thread_id.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_inboxes_inbox_id_threads_thread_id]
 }
+
 
 # ── /v1/inboxes/{inboxId}/threads/{threadId}/labels ───────────────────────────
 
@@ -889,7 +907,9 @@ resource "aws_api_gateway_integration_response" "options_v1_inboxes_inbox_id_thr
   http_method         = aws_api_gateway_method.options_v1_inboxes_inbox_id_threads_thread_id_labels_label_id.http_method
   status_code         = aws_api_gateway_method_response.options_v1_inboxes_inbox_id_threads_thread_id_labels_label_id.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_inboxes_inbox_id_threads_thread_id_labels_label_id]
 }
+
 
 # ── /v1/inboxes/{inboxId}/threads/{threadId}/messages ─────────────────────────
 
@@ -951,7 +971,9 @@ resource "aws_api_gateway_integration_response" "options_v1_inboxes_inbox_id_thr
   http_method         = aws_api_gateway_method.options_v1_inboxes_inbox_id_threads_thread_id_messages.http_method
   status_code         = aws_api_gateway_method_response.options_v1_inboxes_inbox_id_threads_thread_id_messages.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_inboxes_inbox_id_threads_thread_id_messages]
 }
+
 
 # Lambda permission
 resource "aws_lambda_permission" "messages_api" {
@@ -1039,7 +1061,9 @@ resource "aws_api_gateway_integration_response" "options_v1_inboxes_inbox_id_thr
   http_method         = aws_api_gateway_method.options_v1_inboxes_inbox_id_threads_thread_id_messages_message_id.http_method
   status_code         = aws_api_gateway_method_response.options_v1_inboxes_inbox_id_threads_thread_id_messages_message_id.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_inboxes_inbox_id_threads_thread_id_messages_message_id]
 }
+
 
 # ── /v1/inboxes/{inboxId}/threads/{threadId}/messages/{messageId}/reply-all ──
 
@@ -1102,7 +1126,9 @@ resource "aws_api_gateway_integration_response" "options_v1_inboxes_inbox_id_thr
   http_method         = aws_api_gateway_method.options_v1_inboxes_inbox_id_threads_thread_id_messages_message_id_reply_all.http_method
   status_code         = aws_api_gateway_method_response.options_v1_inboxes_inbox_id_threads_thread_id_messages_message_id_reply_all.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_inboxes_inbox_id_threads_thread_id_messages_message_id_reply_all]
 }
+
 
 # ── /v1/inboxes/{inboxId}/threads/{threadId}/messages/{messageId}/forward ────
 
@@ -1165,7 +1191,9 @@ resource "aws_api_gateway_integration_response" "options_v1_inboxes_inbox_id_thr
   http_method         = aws_api_gateway_method.options_v1_inboxes_inbox_id_threads_thread_id_messages_message_id_forward.http_method
   status_code         = aws_api_gateway_method_response.options_v1_inboxes_inbox_id_threads_thread_id_messages_message_id_forward.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_inboxes_inbox_id_threads_thread_id_messages_message_id_forward]
 }
+
 
 # ── /v1/inboxes/{inboxId}/threads/{threadId}/messages/{messageId}/raw ────────
 
@@ -1295,7 +1323,9 @@ resource "aws_api_gateway_integration_response" "options_v1_inboxes_inbox_id_mes
   http_method         = aws_api_gateway_method.options_v1_inboxes_inbox_id_messages_send.http_method
   status_code         = aws_api_gateway_method_response.options_v1_inboxes_inbox_id_messages_send.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_inboxes_inbox_id_messages_send]
 }
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # /v1/inboxes/{inboxId}/drafts
@@ -1376,7 +1406,9 @@ resource "aws_api_gateway_integration_response" "options_v1_inboxes_inbox_id_dra
   http_method         = aws_api_gateway_method.options_v1_inboxes_inbox_id_drafts.http_method
   status_code         = aws_api_gateway_method_response.options_v1_inboxes_inbox_id_drafts.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_inboxes_inbox_id_drafts]
 }
+
 
 # Lambda permission
 resource "aws_lambda_permission" "drafts_api" {
@@ -1481,7 +1513,9 @@ resource "aws_api_gateway_integration_response" "options_v1_inboxes_inbox_id_dra
   http_method         = aws_api_gateway_method.options_v1_inboxes_inbox_id_drafts_draft_id.http_method
   status_code         = aws_api_gateway_method_response.options_v1_inboxes_inbox_id_drafts_draft_id.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_inboxes_inbox_id_drafts_draft_id]
 }
+
 
 # ── /v1/inboxes/{inboxId}/drafts/{draftId}/approve ───────────────────────────
 
@@ -1543,7 +1577,9 @@ resource "aws_api_gateway_integration_response" "options_v1_inboxes_inbox_id_dra
   http_method         = aws_api_gateway_method.options_v1_inboxes_inbox_id_drafts_draft_id_approve.http_method
   status_code         = aws_api_gateway_method_response.options_v1_inboxes_inbox_id_drafts_draft_id_approve.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_inboxes_inbox_id_drafts_draft_id_approve]
 }
+
 
 # ── /v1/inboxes/{inboxId}/drafts/{draftId}/reject ────────────────────────────
 
@@ -1605,7 +1641,9 @@ resource "aws_api_gateway_integration_response" "options_v1_inboxes_inbox_id_dra
   http_method         = aws_api_gateway_method.options_v1_inboxes_inbox_id_drafts_draft_id_reject.http_method
   status_code         = aws_api_gateway_method_response.options_v1_inboxes_inbox_id_drafts_draft_id_reject.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_inboxes_inbox_id_drafts_draft_id_reject]
 }
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # /v1/labels
@@ -1686,7 +1724,9 @@ resource "aws_api_gateway_integration_response" "options_v1_labels" {
   http_method         = aws_api_gateway_method.options_v1_labels.http_method
   status_code         = aws_api_gateway_method_response.options_v1_labels.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_labels]
 }
+
 
 # ── /v1/labels/{labelId} ──────────────────────────────────────────────────────
 
@@ -1782,7 +1822,9 @@ resource "aws_api_gateway_integration_response" "options_v1_labels_label_id" {
   http_method         = aws_api_gateway_method.options_v1_labels_label_id.http_method
   status_code         = aws_api_gateway_method_response.options_v1_labels_label_id.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_labels_label_id]
 }
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # /v1/webhooks
@@ -1863,7 +1905,9 @@ resource "aws_api_gateway_integration_response" "options_v1_webhooks" {
   http_method         = aws_api_gateway_method.options_v1_webhooks.http_method
   status_code         = aws_api_gateway_method_response.options_v1_webhooks.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_webhooks]
 }
+
 
 # Lambda permission
 resource "aws_lambda_permission" "webhooks_api" {
@@ -1968,7 +2012,9 @@ resource "aws_api_gateway_integration_response" "options_v1_webhooks_webhook_id"
   http_method         = aws_api_gateway_method.options_v1_webhooks_webhook_id.http_method
   status_code         = aws_api_gateway_method_response.options_v1_webhooks_webhook_id.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_webhooks_webhook_id]
 }
+
 
 # ── /v1/webhooks/{webhookId}/deliveries ───────────────────────────────────────
 
@@ -2030,7 +2076,9 @@ resource "aws_api_gateway_integration_response" "options_v1_webhooks_webhook_id_
   http_method         = aws_api_gateway_method.options_v1_webhooks_webhook_id_deliveries.http_method
   status_code         = aws_api_gateway_method_response.options_v1_webhooks_webhook_id_deliveries.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_webhooks_webhook_id_deliveries]
 }
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # /v1/search
@@ -2094,7 +2142,9 @@ resource "aws_api_gateway_integration_response" "options_v1_search" {
   http_method         = aws_api_gateway_method.options_v1_search.http_method
   status_code         = aws_api_gateway_method_response.options_v1_search.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_search]
 }
+
 
 # Lambda permission
 resource "aws_lambda_permission" "search_api" {
@@ -2199,7 +2249,9 @@ resource "aws_api_gateway_integration_response" "options_v1_domains" {
   http_method         = aws_api_gateway_method.options_v1_domains.http_method
   status_code         = aws_api_gateway_method_response.options_v1_domains.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_domains]
 }
+
 
 # GET /v1/domains/{domain_id}
 resource "aws_api_gateway_method" "get_v1_domains_domain_id" {
@@ -2275,7 +2327,9 @@ resource "aws_api_gateway_integration_response" "options_v1_domains_domain_id" {
   http_method         = aws_api_gateway_method.options_v1_domains_domain_id.http_method
   status_code         = aws_api_gateway_method_response.options_v1_domains_domain_id.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_domains_domain_id]
 }
+
 
 # POST /v1/domains/{domain_id}/verify
 resource "aws_api_gateway_method" "post_v1_domains_domain_id_verify" {
@@ -2332,7 +2386,9 @@ resource "aws_api_gateway_integration_response" "options_v1_domains_domain_id_ve
   http_method         = aws_api_gateway_method.options_v1_domains_domain_id_verify.http_method
   status_code         = aws_api_gateway_method_response.options_v1_domains_domain_id_verify.status_code
   response_parameters = local.cors_response_parameters
+  depends_on          = [aws_api_gateway_integration.options_v1_domains_domain_id_verify]
 }
+
 
 # Lambda permission
 resource "aws_lambda_permission" "domains_api" {
