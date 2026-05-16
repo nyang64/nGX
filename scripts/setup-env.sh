@@ -665,9 +665,6 @@ log "=== STEP 8: Provision and activate license token ==="
 
 LICENSE_SERVER_URL="${LICENSE_SERVER_URL:-https://license.agent-mx.cc}"
 LICENSE_KEY="${LICENSE_KEY:-}"
-LICENSE_SERVER_ADMIN_KEY="${LICENSE_SERVER_ADMIN_KEY:-}"
-LICENSE_PLAN="${LICENSE_PLAN:-pro}"
-LICENSE_SEAT_LIMIT="${LICENSE_SEAT_LIMIT:--1}"
 
 # Check whether SSM already holds a real JWT (not the terraform placeholder).
 CURRENT_TOKEN=$(aws_cmd ssm get-parameter \
@@ -704,9 +701,9 @@ elif [[ -n "$LICENSE_KEY" ]]; then
     --overwrite >/dev/null
 
   log "  License activated and JWT written to SSM (key: ${LICENSE_KEY})."
-elif [[ -z "$LICENSE_SERVER_ADMIN_KEY" ]]; then
-  # Trial path: no license key set — register trial with license server.
-  log "  No LICENSE_SERVER_ADMIN_KEY set — registering trial license..."
+else
+  # Trial path: no LICENSE_KEY set — register trial with license server.
+  log "  No LICENSE_KEY set — registering 90-day trial license..."
   if [[ -z "${BOOTSTRAP_ORG_ID:-}" ]]; then
     warn "  Could not determine org_id — trial registration skipped."
   else
@@ -725,82 +722,6 @@ elif [[ -z "$LICENSE_SERVER_ADMIN_KEY" ]]; then
     else
       warn "  Trial registration failed — authorizer will reject requests until a valid token is in SSM."
     fi
-  fi
-elif [[ -z "$ORG_SLUG" ]]; then
-  warn "ORG_SLUG not set — cannot auto-provision license without knowing org_id."
-  warn "Set BOOTSTRAP_ORG_SLUG in .env and re-run, or provision manually."
-else
-  # Fetch org_id from database by slug (re-open SSM tunnel for this query)
-  log "  Fetching org_id for slug '${ORG_SLUG}' from database..."
-  aws_cmd ssm start-session \
-    --target "$BASTION_ID" \
-    --document-name AWS-StartPortForwardingSessionToRemoteHost \
-    --parameters "{\"host\":[\"${RDS_PROXY_ENDPOINT}\"],\"portNumber\":[\"5432\"],\"localPortNumber\":[\"${TUNNEL_PORT}\"]}" \
-    &>/dev/null &
-  SSM_TUNNEL_PID=$!
-
-  TUNNEL_WAIT=0
-  while ! nc -z 127.0.0.1 "$TUNNEL_PORT" 2>/dev/null; do
-    sleep 2; TUNNEL_WAIT=$((TUNNEL_WAIT + 2))
-    [[ $TUNNEL_WAIT -lt 60 ]] || die "SSM tunnel did not open on port ${TUNNEL_PORT} within 60s."
-  done
-
-  ORG_ID=$(psql "${TUNNEL_DATABASE_URL}" -tAq \
-    -c "SELECT id FROM organizations WHERE slug = '${ORG_SLUG}' LIMIT 1" \
-    2>/dev/null | tr -d '[:space:]' || true)
-
-  kill "$SSM_TUNNEL_PID" 2>/dev/null || true
-  SSM_TUNNEL_PID=""
-
-  if [[ -z "$ORG_ID" ]]; then
-    warn "  Org with slug '${ORG_SLUG}' not found in database — skipping license provisioning."
-    warn "  Ensure bootstrap completed successfully, or provision license manually."
-  else
-    log "  Org ID: ${ORG_ID}"
-    AWS_ACCOUNT_ID=$(aws_cmd sts get-caller-identity --query Account --output text)
-
-    # Create license key on the license server
-    log "  Creating license key on ${LICENSE_SERVER_URL}..."
-    CREATE_RESP=$(curl -sf -X POST "${LICENSE_SERVER_URL}/admin/licenses" \
-      -H "X-Admin-Key: ${LICENSE_SERVER_ADMIN_KEY}" \
-      -H "Content-Type: application/json" \
-      -d "{
-        \"org_id\": \"${ORG_ID}\",
-        \"plan\": \"${LICENSE_PLAN}\",
-        \"features\": [\"custom_domain\",\"webhooks\",\"websockets\",\"text_search\",\"semantic_search\"],
-        \"seat_limit\": ${LICENSE_SEAT_LIMIT},
-        \"aws_account_ids\": [\"${AWS_ACCOUNT_ID}\"]
-      }") || die "Failed to create license key. Check LICENSE_SERVER_URL and LICENSE_SERVER_ADMIN_KEY."
-
-    LICENSE_KEY=$(echo "$CREATE_RESP" | python3 -c \
-      "import sys,json; print(json.load(sys.stdin)['key'])" 2>/dev/null) \
-      || die "Could not parse license key from response: ${CREATE_RESP}"
-    log "  License key: ${LICENSE_KEY}"
-
-    # Activate the key to obtain a signed JWT
-    log "  Activating license..."
-    ACTIVATE_RESP=$(curl -sf -X POST "${LICENSE_SERVER_URL}/v1/activate" \
-      -H "Content-Type: application/json" \
-      -d "{
-        \"license_key\": \"${LICENSE_KEY}\",
-        \"org_id\": \"${ORG_ID}\",
-        \"aws_account_ids\": [\"${AWS_ACCOUNT_ID}\"]
-      }") || die "Failed to activate license key."
-
-    LICENSE_JWT=$(echo "$ACTIVATE_RESP" | python3 -c \
-      "import sys,json; print(json.load(sys.stdin)['token'])" 2>/dev/null) \
-      || die "Could not parse JWT from activation response."
-
-    # Write the JWT into SSM, overwriting the terraform placeholder
-    log "  Writing license JWT to SSM /ngx/license-token..."
-    aws_cmd ssm put-parameter \
-      --name "/ngx/license-token" \
-      --type "SecureString" \
-      --value "$LICENSE_JWT" \
-      --overwrite >/dev/null
-
-    log "  License provisioned successfully (plan: ${LICENSE_PLAN}, key: ${LICENSE_KEY})."
-    log "  *** Save the license key above — you will need it to revoke or renew manually. ***"
   fi
 fi
 
