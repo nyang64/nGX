@@ -126,7 +126,9 @@ resource "aws_lambda_function" "authorizer" {
   }
 
   environment {
-    variables = local.db_env
+    variables = merge(local.db_env, {
+      LICENSE_TRIAL_TOKEN = ""
+    })
   }
 
   depends_on = [aws_cloudwatch_log_group.lambda_authorizer]

@@ -109,14 +109,24 @@ func checkLicense(ctx context.Context, orgID string) (*LicenseClaims, error) {
 		jwtStr = cachedJWT
 	} else {
 		// Fetch from SSM.
+		ssmVal := ""
 		out, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
 			Name:           aws.String(ssmLicenseTokenPath),
 			WithDecryption: aws.Bool(true),
 		})
-		if err != nil {
-			return nil, fmt.Errorf("license: failed to fetch token from SSM: %w", err)
+		if err == nil {
+			ssmVal = aws.ToString(out.Parameter.Value)
 		}
-		jwtStr = aws.ToString(out.Parameter.Value)
+
+		if ssmVal == "" || ssmVal == "placeholder" {
+			// No enterprise license configured — use built-in trial JWT.
+			jwtStr = os.Getenv("LICENSE_TRIAL_TOKEN")
+			if jwtStr == "" {
+				return nil, fmt.Errorf("license: no license token available (SSM is placeholder and LICENSE_TRIAL_TOKEN is not set)")
+			}
+		} else {
+			jwtStr = ssmVal
+		}
 	}
 
 	// Parse and verify JWT.
@@ -131,8 +141,13 @@ func checkLicense(ctx context.Context, orgID string) (*LicenseClaims, error) {
 		return nil, fmt.Errorf("license: invalid token: %w", err)
 	}
 
-	// Verify org_id matches.
-	if claims.OrgID != orgID {
+	// Hard-deny if the license server has explicitly marked this trial as expired.
+	if claims.Plan == "trial_expired" {
+		return nil, fmt.Errorf("license: trial period has expired — visit license.agent-mx.cc to upgrade")
+	}
+
+	// Skip org_id check for trial plan — the global trial JWT has an empty org_id.
+	if claims.Plan != "trial" && claims.OrgID != orgID {
 		return nil, fmt.Errorf("license: org_id mismatch: token is for %q, request is for %q", claims.OrgID, orgID)
 	}
 
@@ -144,11 +159,12 @@ func checkLicense(ctx context.Context, orgID string) (*LicenseClaims, error) {
 	}
 
 	// Cold-start revocation check.
-	if isColdStart {
+	if isColdStart && claims.Plan != "trial" {
 		if err := revocationCheck(jwtStr); err != nil {
-			// On network error, log and allow (don't block customers).
 			slog.Warn("authorizer: license revocation check failed (allowing)", "error", err)
 		}
+		isColdStart = false
+	} else {
 		isColdStart = false
 	}
 

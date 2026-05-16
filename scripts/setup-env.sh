@@ -626,6 +626,19 @@ else
       sed -i '' "s|^# Org:.*|# Org:    ${ORG_NAME}  (${NEW_ORG_ID})|" "${REPO_ROOT}/.env"
     fi
 
+    # Write org_id to SSM /ngx/bootstrap-org-id for trial license registration.
+    BOOTSTRAP_ORG_ID="${NEW_ORG_ID:-}"
+    if [[ -n "$BOOTSTRAP_ORG_ID" ]]; then
+      log "  Writing bootstrap org_id to SSM..."
+      aws_cmd ssm put-parameter \
+        --name "/ngx/bootstrap-org-id" \
+        --value "$BOOTSTRAP_ORG_ID" \
+        --type "String" \
+        --overwrite \
+        --region "$AWS_REGION" > /dev/null
+      log "  Org ID written to SSM: $BOOTSTRAP_ORG_ID"
+    fi
+
     kill "$SSM_TUNNEL_PID" 2>/dev/null || true
     SSM_TUNNEL_PID=""
 
@@ -665,9 +678,27 @@ CURRENT_TOKEN=$(aws_cmd ssm get-parameter \
 if [[ "$CURRENT_TOKEN" != "placeholder" && -n "$CURRENT_TOKEN" ]]; then
   log "  License token already provisioned in SSM — skipping."
 elif [[ -z "$LICENSE_SERVER_ADMIN_KEY" ]]; then
-  warn "LICENSE_SERVER_ADMIN_KEY not set in .env — skipping license provisioning."
-  warn "Add LICENSE_SERVER_ADMIN_KEY to .env and re-run setup, or provision manually:"
-  warn "  See .env.example for the required variables."
+  # Trial path: no admin key set — register trial with license server.
+  log "  No LICENSE_SERVER_ADMIN_KEY set — registering trial license..."
+  if [[ -z "${BOOTSTRAP_ORG_ID:-}" ]]; then
+    warn "  Could not determine org_id — trial registration skipped."
+  else
+    TRIAL_RESP=$(curl -sf -X POST "${LICENSE_SERVER_URL}/v1/trial/token" \
+      -H "Content-Type: application/json" \
+      -d "{\"org_id\":\"${BOOTSTRAP_ORG_ID}\"}" 2>&1) || true
+    TRIAL_TOKEN=$(echo "$TRIAL_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('token',''))" 2>/dev/null || echo "")
+    if [[ -n "$TRIAL_TOKEN" ]]; then
+      aws_cmd ssm put-parameter \
+        --name "/ngx/license-token" \
+        --value "$TRIAL_TOKEN" \
+        --type "SecureString" \
+        --overwrite \
+        --region "$AWS_REGION" > /dev/null
+      log "  Trial license token written to SSM (90-day trial active)."
+    else
+      warn "  Trial registration failed — authorizer will use LICENSE_TRIAL_TOKEN env var fallback."
+    fi
+  fi
 elif [[ -z "$ORG_SLUG" ]]; then
   warn "ORG_SLUG not set — cannot auto-provision license without knowing org_id."
   warn "Set BOOTSTRAP_ORG_SLUG in .env and re-run, or provision manually."

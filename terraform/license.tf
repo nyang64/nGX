@@ -11,6 +11,16 @@ resource "aws_ssm_parameter" "license_token" {
   }
 }
 
+resource "aws_ssm_parameter" "bootstrap_org_id" {
+  name  = "/ngx/bootstrap-org-id"
+  type  = "String"
+  value = "placeholder"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
 # CloudWatch alarm: fire if license_refresh Lambda has any errors in 25-hour window
 resource "aws_cloudwatch_metric_alarm" "license_refresh_errors" {
   alarm_name          = "${local.prefix}-license-refresh-errors"
