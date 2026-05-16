@@ -664,6 +664,7 @@ echo
 log "=== STEP 8: Provision and activate license token ==="
 
 LICENSE_SERVER_URL="${LICENSE_SERVER_URL:-https://license.agent-mx.cc}"
+LICENSE_KEY="${LICENSE_KEY:-}"
 LICENSE_SERVER_ADMIN_KEY="${LICENSE_SERVER_ADMIN_KEY:-}"
 LICENSE_PLAN="${LICENSE_PLAN:-pro}"
 LICENSE_SEAT_LIMIT="${LICENSE_SEAT_LIMIT:--1}"
@@ -677,8 +678,34 @@ CURRENT_TOKEN=$(aws_cmd ssm get-parameter \
 
 if [[ "$CURRENT_TOKEN" != "placeholder" && -n "$CURRENT_TOKEN" ]]; then
   log "  License token already provisioned in SSM — skipping."
+elif [[ -n "$LICENSE_KEY" ]]; then
+  # Paying customer path: LICENSE_KEY provided — activate pre-issued license.
+  log "  LICENSE_KEY set — activating existing license..."
+  if [[ -z "${BOOTSTRAP_ORG_ID:-}" ]]; then
+    die "  BOOTSTRAP_ORG_ID not set — cannot activate license without org_id. Ensure STEP 7 completed."
+  fi
+  AWS_ACCOUNT_ID=$(aws_cmd sts get-caller-identity --query Account --output text)
+  ACTIVATE_RESP=$(curl -sf -X POST "${LICENSE_SERVER_URL}/v1/activate" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"license_key\": \"${LICENSE_KEY}\",
+      \"org_id\": \"${BOOTSTRAP_ORG_ID}\",
+      \"aws_account_ids\": [\"${AWS_ACCOUNT_ID}\"]
+    }") || die "Failed to activate license key '${LICENSE_KEY}'. Check LICENSE_KEY and LICENSE_SERVER_URL."
+
+  LICENSE_JWT=$(echo "$ACTIVATE_RESP" | python3 -c \
+    "import sys,json; print(json.load(sys.stdin)['token'])" 2>/dev/null) \
+    || die "Could not parse JWT from activation response: ${ACTIVATE_RESP}"
+
+  aws_cmd ssm put-parameter \
+    --name "/ngx/license-token" \
+    --type "SecureString" \
+    --value "$LICENSE_JWT" \
+    --overwrite >/dev/null
+
+  log "  License activated and JWT written to SSM (key: ${LICENSE_KEY})."
 elif [[ -z "$LICENSE_SERVER_ADMIN_KEY" ]]; then
-  # Trial path: no admin key set — register trial with license server.
+  # Trial path: no license key set — register trial with license server.
   log "  No LICENSE_SERVER_ADMIN_KEY set — registering trial license..."
   if [[ -z "${BOOTSTRAP_ORG_ID:-}" ]]; then
     warn "  Could not determine org_id — trial registration skipped."
@@ -696,7 +723,7 @@ elif [[ -z "$LICENSE_SERVER_ADMIN_KEY" ]]; then
         --region "$AWS_REGION" > /dev/null
       log "  Trial license token written to SSM (90-day trial active)."
     else
-      warn "  Trial registration failed — authorizer will use LICENSE_TRIAL_TOKEN env var fallback."
+      warn "  Trial registration failed — authorizer will reject requests until a valid token is in SSM."
     fi
   fi
 elif [[ -z "$ORG_SLUG" ]]; then
