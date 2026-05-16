@@ -277,7 +277,7 @@ _handle_already_exists_errors() {
   for fn_key in authorizer orgs auth inboxes threads messages drafts webhooks search \
                 ws_connect ws_disconnect email_inbound email_outbound \
                 event_dispatcher_webhook event_dispatcher_ws embedder \
-                ses_events scheduler_drafts domains; do
+                ses_events scheduler_drafts domains license_refresh; do
     local fn_name
     case "$fn_key" in
       ws_connect)               fn_name="${PREFIX}-ws-connect" ;;
