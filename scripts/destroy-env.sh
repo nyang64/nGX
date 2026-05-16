@@ -355,6 +355,63 @@ log "STEP 2 complete."
 echo
 
 # ─────────────────────────────────────────────────────────────────────────────
+# STEP 2b — Revoke license key from license server (best-effort, before SSM is destroyed)
+# ─────────────────────────────────────────────────────────────────────────────
+log "=== STEP 2b: Revoke license token ==="
+
+REPO_ROOT_DESTROY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LICENSE_SERVER_URL_DESTROY="${LICENSE_SERVER_URL:-}"
+LICENSE_SERVER_ADMIN_KEY_DESTROY="${LICENSE_SERVER_ADMIN_KEY:-}"
+
+# Pull from .env if not already in environment
+if [[ -z "$LICENSE_SERVER_URL_DESTROY" ]]; then
+  LICENSE_SERVER_URL_DESTROY=$(grep -E '^LICENSE_SERVER_URL=' "${REPO_ROOT_DESTROY}/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)
+  LICENSE_SERVER_URL_DESTROY="${LICENSE_SERVER_URL_DESTROY:-https://license.agent-mx.cc}"
+fi
+if [[ -z "$LICENSE_SERVER_ADMIN_KEY_DESTROY" ]]; then
+  LICENSE_SERVER_ADMIN_KEY_DESTROY=$(grep -E '^LICENSE_SERVER_ADMIN_KEY=' "${REPO_ROOT_DESTROY}/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)
+fi
+
+if [[ -z "$LICENSE_SERVER_ADMIN_KEY_DESTROY" ]]; then
+  warn "LICENSE_SERVER_ADMIN_KEY not set — skipping license revocation."
+  warn "The license key will expire naturally within its grace period."
+else
+  # Read JWT from SSM and decode the license_key claim from the payload
+  JWT=$(aws_cmd ssm get-parameter \
+    --name "/ngx/license-token" \
+    --with-decryption \
+    --query 'Parameter.Value' \
+    --output text 2>/dev/null || echo "")
+
+  if [[ -z "$JWT" || "$JWT" == "placeholder" || "$JWT" == "None" ]]; then
+    log "  No active license token found in SSM — skipping revocation."
+  else
+    LICENSE_KEY_DESTROY=$(echo "$JWT" | cut -d. -f2 | python3 -c "
+import sys, base64, json
+d = sys.stdin.read().strip()
+payload = json.loads(base64.urlsafe_b64decode(d + '=='))
+print(payload.get('license_key', ''))
+" 2>/dev/null | tr -d '[:space:]' || true)
+
+    if [[ -z "$LICENSE_KEY_DESTROY" ]]; then
+      warn "  Could not decode license_key from JWT — skipping revocation."
+    else
+      log "  Revoking license key: ${LICENSE_KEY_DESTROY}"
+      curl -s -X POST "${LICENSE_SERVER_URL_DESTROY}/admin/licenses/${LICENSE_KEY_DESTROY}/revoke" \
+        -H "X-Admin-Key: ${LICENSE_SERVER_ADMIN_KEY_DESTROY}" \
+        -H "Content-Type: application/json" \
+        -d "{\"reason\":\"environment destroyed — ${PREFIX}\"}" \
+        >/dev/null \
+        && log "  License key revoked." \
+        || warn "  Revocation failed — key may still be active on the license server (non-fatal)."
+    fi
+  fi
+fi
+
+log "STEP 2b complete."
+echo
+
+# ─────────────────────────────────────────────────────────────────────────────
 # STEP 3 — Terraform destroy (state-rm + destroy -refresh=false)
 # ─────────────────────────────────────────────────────────────────────────────
 log "=== STEP 3: Terraform destroy ==="
