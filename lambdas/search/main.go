@@ -94,6 +94,16 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 	cursor := event.QueryStringParameters["cursor"]
 	mode := event.QueryStringParameters["mode"]
 
+	if mode == "semantic" {
+		if !claims.HasFeature("semantic_search") {
+			return shared.Error(403, "semantic search feature not available on your plan"), nil
+		}
+	} else {
+		if !claims.HasFeature("text_search") {
+			return shared.Error(403, "text search feature not available on your plan"), nil
+		}
+	}
+
 	var (
 		results    []searchResult
 		nextCursor string

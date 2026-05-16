@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -53,6 +54,14 @@ func handler(ctx context.Context, event events.APIGatewayWebsocketProxyRequest) 
 		return events.APIGatewayProxyResponse{StatusCode: 401, Body: "Unauthorized"}, nil
 	}
 
+	var featuresStr string
+	if authCtx, ok := event.RequestContext.Authorizer.(map[string]interface{}); ok {
+		featuresStr, _ = authCtx["features"].(string)
+	}
+	if !hasFeature(featuresStr, "websockets") {
+		return events.APIGatewayProxyResponse{StatusCode: 403, Body: "websockets feature not available on your plan"}, nil
+	}
+
 	connectionID := event.RequestContext.ConnectionID
 	now := time.Now().UTC()
 	ttl := now.Add(24 * time.Hour)
@@ -70,6 +79,15 @@ func handler(ctx context.Context, event events.APIGatewayWebsocketProxyRequest) 
 
 	slog.Info("ws_connect: connected", "connection_id", connectionID, "org_id", claims.OrgID)
 	return events.APIGatewayProxyResponse{StatusCode: 200, Body: "Connected"}, nil
+}
+
+func hasFeature(featuresStr, feature string) bool {
+	for _, f := range strings.Split(featuresStr, ",") {
+		if strings.TrimSpace(f) == feature {
+			return true
+		}
+	}
+	return false
 }
 
 func validateKey(ctx context.Context, plaintextKey string) (*authpkg.Claims, error) {

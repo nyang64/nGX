@@ -58,6 +58,10 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 		return shared.Error(401, "unauthorized"), nil
 	}
 
+	if !claims.HasFeature("custom_domain") {
+		return shared.Error(403, "custom domain feature not available on your plan"), nil
+	}
+
 	if !claims.HasScope(authpkg.ScopeOrgAdmin) {
 		return shared.Error(403, "insufficient scope"), nil
 	}

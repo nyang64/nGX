@@ -35,6 +35,16 @@ func (c *Claims) HasScope(s Scope) bool {
 	return false
 }
 
+// HasFeature reports whether the license grants the named feature.
+func (c *Claims) HasFeature(feature string) bool {
+	for _, f := range c.Features {
+		if f == feature {
+			return true
+		}
+	}
+	return false
+}
+
 // CanAccessPod reports whether the claims allow access to podID.
 // A nil PodID means the key is org-wide and can access any pod.
 func (c *Claims) CanAccessPod(podID uuid.UUID) bool {

@@ -53,6 +53,10 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 		return shared.Error(401, "unauthorized"), nil
 	}
 
+	if !claims.HasFeature("webhooks") {
+		return shared.Error(403, "webhooks feature not available on your plan"), nil
+	}
+
 	webhookID, _ := uuid.Parse(event.PathParameters["webhookId"])
 
 	switch event.Resource {
