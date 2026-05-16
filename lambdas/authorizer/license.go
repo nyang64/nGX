@@ -109,23 +109,16 @@ func checkLicense(ctx context.Context, orgID string) (*LicenseClaims, error) {
 		jwtStr = cachedJWT
 	} else {
 		// Fetch from SSM.
-		ssmVal := ""
 		out, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
 			Name:           aws.String(ssmLicenseTokenPath),
 			WithDecryption: aws.Bool(true),
 		})
-		if err == nil {
-			ssmVal = aws.ToString(out.Parameter.Value)
+		if err != nil {
+			return nil, fmt.Errorf("license: failed to fetch token from SSM: %w", err)
 		}
-
-		if ssmVal == "" || ssmVal == "placeholder" {
-			// No enterprise license configured — use built-in trial JWT.
-			jwtStr = os.Getenv("LICENSE_TRIAL_TOKEN")
-			if jwtStr == "" {
-				return nil, fmt.Errorf("license: no license token available (SSM is placeholder and LICENSE_TRIAL_TOKEN is not set)")
-			}
-		} else {
-			jwtStr = ssmVal
+		jwtStr = aws.ToString(out.Parameter.Value)
+		if jwtStr == "" || jwtStr == "placeholder" {
+			return nil, fmt.Errorf("license: deployment not yet configured — run setup-env.sh to activate your license")
 		}
 	}
 
