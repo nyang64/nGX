@@ -350,8 +350,8 @@ nGX/
 
 nGX is source-available software licensed under the [nGX Commercial Source License](LICENSE).
 
-- **Free** for non-commercial use, evaluation, and internal assessment (up to 90 days)
-- **Commercial license required** for production or business use — contact [licensing@nyklabs.com](mailto:licensing@nyklabs.com)
+- **Free** for non-commercial use, evaluation, and internal assessment — no sign-up required; `setup-env.sh` automatically provisions a 90-day trial license on first run
+- **Commercial license required** for production or business use — [subscribe at license.agent-mx.cc/signup](https://license.agent-mx.cc/signup)
 - **Managed service rights reserved** — only nyklabs.com may offer nGX as a hosted or cloud service
 
 Copyright (c) 2026 [nyklabs.com](https://nyklabs.com). All rights reserved.

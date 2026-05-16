@@ -150,7 +150,7 @@ Individual email messages, both inbound and outbound. Bodies are stored in S3; o
 | created_at | TIMESTAMPTZ | Set on insert |
 | updated_at | TIMESTAMPTZ | Maintained by trigger |
 | search_vector | TSVECTOR | Auto-populated by trigger; see Full-Text Search below |
-| embedding | vector(256) | 256-dim MRL-truncated embedding from `nomic-embed-text-v1.5`; NULL until the embedder service processes the message |
+| embedding | vector(768) | 768-dim embedding from `@cf/baai/bge-base-en-v1.5` via Cloudflare AI; NULL until the embedder service processes the message |
 | embedded_at | TIMESTAMPTZ | When the embedding was last generated; NULL if not yet embedded |
 
 Indexes:
@@ -470,7 +470,7 @@ Weight `A` (subject) ranks higher than weight `B` (addresses) in `ts_rank` scori
 
 ### Semantic Search (pgvector)
 
-The `messages` table also has an `embedding vector(256)` column. Embeddings are generated asynchronously by the `embedder` service using the `nomic-embed-text-v1.5` model, with MRL truncation to 256 dimensions.
+The `messages` table also has an `embedding vector(768)` column. Embeddings are generated asynchronously by the `embedder` Lambda using the `@cf/baai/bge-base-en-v1.5` model hosted on Cloudflare AI, producing full 768-dimensional vectors with no truncation.
 
 An HNSW index enables approximate nearest-neighbour cosine similarity queries:
 
